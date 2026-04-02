@@ -1,0 +1,21 @@
+[dotenv@17.2.3] injecting env (15) from .env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+[dotenv@17.2.3] injecting env (0) from .env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+[dotenv@17.2.3] injecting env (0) from .env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+✅ Database connection established successfully.
+Syncing database...
+✅ Database synced
+🌱 Seeding database with test data (bulk inserts)...
+🌱 Seeding database with test data (bulk inserts)...
+✅ Users bulk-inserted
+✅ Places bulk-inserted
+✅ PlaceImages bulk-inserted
+✅ Reviews bulk-inserted
+✅ Favorites bulk-inserted
+✅ Bookings bulk-inserted
+✅ Itineraries bulk-inserted
+✅ Chat & Messages bulk-inserted
+🎉 Database seeding completed successfully!
+🚀 Server is running on port 5000
+📁 Environment: development
+🔗 http://localhost:5000
+[0mGET /api/places/1 [31m500[0m 10.164 ms - 87[0m

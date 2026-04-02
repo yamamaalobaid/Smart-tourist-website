@@ -30,20 +30,10 @@ export const createPaymentSession = async (req: any, res: Response) => {
     const userId = req.user.id;
 
     // الحصول على معلومات الحجز
-    const booking = await Booking.findByPk(bookingId, {
-      include: [
-        { 
-          model: Place, 
-          as: 'place',
-          attributes: ['id', 'nameAr', 'nameEn', 'featuredImage', 'entryFee'] 
-        },
-        { 
-          model: User, 
-          as: 'user',
-          attributes: ['id', 'email', 'firstName', 'lastName'] 
-        },
-      ],
-    });
+    const booking = await Booking.findById(bookingId)
+      .populate('place', 'nameAr nameEn featuredImage entryFee')
+      .populate('user', 'email firstName lastName')
+      .lean();
 
     if (!booking) {
       return res.status(404).json({
@@ -137,7 +127,7 @@ export const createPaymentSession = async (req: any, res: Response) => {
           bookingNumber: bookingData.bookingNumber,
         },
       },
-    });
+    }); 
 
     res.json({
       success: true,
@@ -151,7 +141,7 @@ export const createPaymentSession = async (req: any, res: Response) => {
         bookingDate: bookingData.bookingDate,
         amountInCents,
       }
-    });
+    }); 
   } catch (error: any) {
     console.error('Create payment session error:', error);
     res.status(500).json({
@@ -223,7 +213,7 @@ export const stripeWebhook = async (req: Request, res: Response) => {
           console.log(`Unhandled event type: ${event.type}`);
       }
 
-      res.json({ received: true, handled: true });
+      res.json({ received: true, handled: true }); 
     } catch (error: any) {
       console.error('Error handling webhook event:', error);
       res.status(500).json({ error: 'Failed to handle webhook event' });
@@ -245,7 +235,7 @@ const handleCheckoutSessionCompleted = async (session: any) => {
       return;
     }
 
-    const booking = await Booking.findByPk(bookingId);
+    const booking = await Booking.findById(bookingId);
     if (booking) {
       const updateData: any = {
         paymentStatus: 'paid',
@@ -255,7 +245,8 @@ const handleCheckoutSessionCompleted = async (session: any) => {
         confirmedAt: new Date(),
       };
 
-      await booking.update(updateData);
+      Object.assign(booking, updateData);
+      await booking.save();
 
       console.log(`✅ Payment confirmed for booking ${bookingId}, user ${userId}`);
 
@@ -273,13 +264,14 @@ const handleCheckoutSessionExpired = async (session: any) => {
     const bookingId = session.metadata?.bookingId;
     
     if (bookingId) {
-      const booking = await Booking.findByPk(bookingId);
+      const booking = await Booking.findById(bookingId);
       if (booking && booking.status === 'pending') {
-        await booking.update({
+        Object.assign(booking, {
           status: 'cancelled',
           cancellationReason: 'انتهاء صلاحية جلسة الدفع',
           cancelledAt: new Date(),
         });
+        await booking.save();
         
         console.log(`⏰ Booking ${bookingId} cancelled due to expired payment session`);
       }
@@ -295,9 +287,9 @@ const handlePaymentIntentSucceeded = async (paymentIntent: any) => {
     const bookingId = paymentIntent.metadata?.bookingId;
     
     if (bookingId) {
-      const booking = await Booking.findByPk(bookingId);
+      const booking = await Booking.findById(bookingId);
       if (booking && booking.paymentStatus === 'pending') {
-        await booking.update({
+        Object.assign(booking, {
           paymentStatus: 'paid',
           transactionId: paymentIntent.id,
         });
@@ -316,9 +308,9 @@ const handlePaymentIntentFailed = async (paymentIntent: any) => {
     const bookingId = paymentIntent.metadata?.bookingId;
     
     if (bookingId) {
-      const booking = await Booking.findByPk(bookingId);
+      const booking = await Booking.findById(bookingId);
       if (booking && booking.status === 'pending') {
-        await booking.update({
+        Object.assign(booking, {
           paymentStatus: 'failed',
           cancellationReason: 'فشل في عملية الدفع',
         });
@@ -337,9 +329,9 @@ const handlePaymentIntentCanceled = async (paymentIntent: any) => {
     const bookingId = paymentIntent.metadata?.bookingId;
     
     if (bookingId) {
-      const booking = await Booking.findByPk(bookingId);
+      const booking = await Booking.findById(bookingId);
       if (booking && booking.status === 'pending') {
-        await booking.update({
+        Object.assign(booking, {
           paymentStatus: 'cancelled',
           cancellationReason: 'تم إلغاء عملية الدفع',
           cancelledAt: new Date(),
@@ -359,14 +351,8 @@ export const getPaymentDetails = async (req: any, res: Response) => {
     const { bookingId } = req.params;
     const userId = req.user.id;
 
-    const booking = await Booking.findOne({
-      where: { id: bookingId, userId },
-      include: [{ 
-        model: Place, 
-        as: 'place',
-        attributes: ['id', 'nameAr', 'nameEn', 'featuredImage'] 
-      }],
-    });
+    const booking = await Booking.findOne({ _id: bookingId, userId })
+      .populate('place', 'id nameAr nameEn featuredImage');
 
     if (!booking) {
       return res.status(404).json({
@@ -395,14 +381,14 @@ export const getPaymentDetails = async (req: any, res: Response) => {
         canPay: bookingData.status === 'pending' && bookingData.paymentStatus === 'pending',
         requiresPayment: bookingData.status === 'pending',
       },
-    });
+    }); 
   } catch (error: any) {
     console.error('Get payment details error:', error);
     res.status(500).json({
       success: false,
       message: 'حدث خطأ أثناء جلب تفاصيل الدفع',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-    });
+    }); 
   }
 };
 
@@ -465,7 +451,7 @@ export const createPaymentIntent = async (req: any, res: Response) => {
     const { bookingId, currency = 'syp' } = req.body;
     const userId = req.user.id;
 
-    const booking = await Booking.findByPk(bookingId, {
+    const booking = await Booking.findById(bookingId, {
       include: [{ 
         model: Place, 
         as: 'place',
@@ -608,21 +594,21 @@ export const getPaymentHistory = async (req: any, res: Response) => {
     const limitNum = parseInt(limit as string) || 10;
     const offset = (pageNum - 1) * limitNum;
 
-    const { count, rows: bookings } = await Booking.findAndCountAll({
-      where: { 
-        userId,
-        paymentStatus: 'paid',
-        status: { [require('sequelize').Op.ne]: 'cancelled' }
-      },
-      include: [{ 
-        model: Place, 
-        as: 'place',
-        attributes: ['id', 'nameAr', 'nameEn', 'featuredImage'] 
-      }],
-      order: [['confirmedAt', 'DESC']],
-      limit: limitNum,
-      offset,
+    const count = await Booking.countDocuments({
+      userId,
+      paymentStatus: 'paid',
+      status: { $ne: 'cancelled' }
     });
+    const bookings = await Booking.find({
+      userId,
+      paymentStatus: 'paid',
+      status: { $ne: 'cancelled' }
+    })
+      .populate('place', 'nameAr nameEn featuredImage')
+      .sort({ createdAt: -1 })
+      .skip(offset)
+      .limit(limitNum)
+      .lean();
 
     // تنسيق البيانات
     const paymentHistory = (bookings as any[]).map(booking => ({

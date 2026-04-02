@@ -2,24 +2,49 @@ import { Request, Response } from 'express';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import { User } from '../models';
 import emailService from '../services/emailService';
-import { Op } from 'sequelize';
+import * as fs from 'fs';
+import * as path from 'path';
+
+const ERROR_LOG = path.resolve(__dirname, '../../logs/errors.log');
+function logErrorToFile(tag: string, err: any) {
+  try {
+    const msg = `[${new Date().toISOString()}] ${tag} - ${err && err.stack ? err.stack : String(err)}\n`;
+    fs.mkdirSync(path.dirname(ERROR_LOG), { recursive: true });
+    fs.appendFileSync(ERROR_LOG, msg);
+  } catch (e) {
+    console.error('Failed to write error log', e);
+  }
+}
 
 // توليد JWT Token
 const generateToken = (id: number): string => {
-  const secret = process.env.JWT_SECRET;
+  // In development, allow a default secret for convenience. In production, JWT_SECRET must be set.
+  const env = process.env.NODE_ENV || 'development';
+  let secret = process.env.JWT_SECRET;
   if (!secret) {
-    throw new Error('JWT_SECRET is not defined in environment variables');
+    if (env === 'development') {
+      secret = 'damascus-dev-secret';
+      console.warn('JWT_SECRET not set — using development fallback secret');
+    } else {
+      throw new Error('JWT_SECRET is not defined in environment variables');
+    }
   }
-  
+
   const expiresIn = process.env.JWT_EXPIRE || '7d';
-  
   // استخدم as any لتجاوز مشكلة النوع في jwt.sign
-  return jwt.sign({ id }, secret, { expiresIn } as any);
+  return jwt.sign({ id }, secret as string, { expiresIn } as any);
 };
 
 // تسجيل مستخدم جديد
 export const register = async (req: Request, res: Response) => {
   try {
+    // dump request body for debugging
+    try {
+      fs.mkdirSync(path.resolve(__dirname, '../../logs'), { recursive: true });
+      fs.appendFileSync(path.resolve(__dirname, '../../logs/requests.log'), `[${new Date().toISOString()}] register body: ${JSON.stringify(req.body)}\n`);
+    } catch (e) {
+      console.warn('Failed to write requests log', e);
+    }
     const { email, password, firstName, lastName, phone } = req.body;
 
     // التحقق من الحقول المطلوبة
@@ -49,12 +74,10 @@ export const register = async (req: Request, res: Response) => {
 
     // التحقق من وجود المستخدم
     const existingUser = await User.findOne({
-      where: {
-        [Op.or]: [
-          { email },
-          { phone: phone || '' }
-        ]
-      }
+      $or: [
+        { email },
+        { phone: phone || null }
+      ]
     });
 
     if (existingUser) {
@@ -69,6 +92,10 @@ export const register = async (req: Request, res: Response) => {
     // إنشاء توكن التفعيل
     const verificationToken = generateToken(Date.now());
 
+    // في development، جعل الحساب مُفعّل مباشرة للاختبار السهل
+    const env = process.env.NODE_ENV || 'development';
+    const isVerified = env === 'development' ? true : false;
+
     // إنشاء المستخدم مع جميع الحقول المطلوبة
     const user = await User.create({
       email,
@@ -77,7 +104,7 @@ export const register = async (req: Request, res: Response) => {
       lastName: lastName || null,
       phone: phone || null,
       language: 'ar', // القيمة الافتراضية
-      isVerified: false, // مهم: يجب تحديد قيمة
+      isVerified: isVerified, // مفعّل في development
       verificationToken: verificationToken,
     } as any); // استخدم as any للتغلب على مشكلة TypeScript
 
@@ -109,11 +136,13 @@ export const register = async (req: Request, res: Response) => {
         language: user.language,
         isVerified: user.isVerified,
         avatarUrl: user.avatarUrl,
+        role: user.role,
       },
       message: 'تم إنشاء الحساب بنجاح، يرجى تفعيل بريدك الإلكتروني',
     });
   } catch (error: any) {
     console.error('Register error:', error);
+    logErrorToFile('register', error);
     res.status(500).json({
       success: false,
       message: 'حدث خطأ أثناء إنشاء الحساب',
@@ -124,70 +153,54 @@ export const register = async (req: Request, res: Response) => {
 
 // تسجيل الدخول
 export const login = async (req: Request, res: Response) => {
+  const { email, password, phone } = req.body || {};
+  console.error(`@@@ [auth] Login attempt start: email="${email}", phone="${phone}", passwordLength=${password ? password.length : 0}`);
+  
   try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'يرجى إدخال البريد الإلكتروني وكلمة المرور',
-      });
+    if ((!email && !phone) || !password) {
+      console.error('@@@ [auth] Error: Missing email/phone or password');
+      return res.status(400).json({ success: false, message: 'email/phone and password required' });
     }
 
-    // البحث عن المستخدم
-    const user = await User.findOne({ where: { email } });
+    const user: any = await (User as any).findOne({ $or: [ { email }, { phone } ] }) as any;
     if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'بيانات الدخول غير صحيحة',
-      });
+      console.error(`@@@ [auth] Error: User not found for email="${email}", phone="${phone}"`);
+      return res.status(401).json({ success: false, message: 'invalid credentials' });
     }
 
-    // التحقق من كلمة المرور
-    const isMatch = await user.comparePassword(password);
+    console.error(`@@@ [auth] Found user: email="${user.email}", role="${user.role}", storedHash="${user.password}"`);
+    
+    // Manual compare for debugging
+    const manualMatch = await (User.modelName ? (require('bcryptjs') as any).compare(password, user.password) : false);
+    console.error(`@@@ [auth] Manual bcrypt match result: ${manualMatch}`);
+
+    const isMatch = await (user as any).comparePassword(password);
+    console.error(`@@@ [auth] model.comparePassword result: ${isMatch}`);
+
     if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: 'بيانات الدخول غير صحيحة',
-      });
+      console.error(`@@@ [auth] Error: Password mismatch for user="${user.email}"`);
+      return res.status(401).json({ success: false, message: 'invalid credentials' });
     }
 
-    // التحقق من تفعيل الحساب
-    if (!user.isVerified) {
-      return res.status(403).json({
-        success: false,
-        message: 'يرجى تفعيل حسابك أولاً',
-        needsVerification: true,
-        email: user.email,
-      });
-    }
-
-    // تحديث آخر دخول
-    await user.update({ lastLogin: new Date() });
-
-    // توليد التوكن
+    user.lastLogin = new Date();
+    await user.save();
     const token = generateToken(user.id);
-
-    res.json({
-      success: true,
-      token,
-      user: {
-        id: user.id,
-        email: user.email,
+    console.error(`@@@ [auth] Success: Login successful for "${user.email}"`);
+    
+    return res.json({ 
+      success: true, 
+      token, 
+      user: { 
+        id: user.id, 
+        _id: user._id,
+        email: user.email, 
         firstName: user.firstName,
-        lastName: user.lastName,
-        phone: user.phone,
-        language: user.language,
-        isVerified: user.isVerified,
-        avatarUrl: user.avatarUrl,
-      },
+        role: user.role 
+      } 
     });
   } catch (error: any) {
-    console.error('Login error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء تسجيل الدخول',
-    });
+    console.error('@@@ [auth] FATAL ERROR during login:', error && error.message);
+    return res.status(500).json({ success: false, message: 'login error', error: error && error.message });
   }
 };
 
@@ -203,19 +216,18 @@ export const verifyEmail = async (req: Request, res: Response) => {
       });
     }
 
-    const user = await User.findOne({ where: { verificationToken: token } });
+    const user = await User.findOne({ verificationToken: token });
     if (!user) {
-      return res.status(404).json({
+      return res.status(400).json({
         success: false,
         message: 'توكن التفعيل غير صالح أو منتهي',
       });
     }
 
-    // تفعيل الحساب - استخدم null بدلاً من undefined
-    await user.update({
-      isVerified: true,
-      verificationToken: null as any, // استخدم as any
-    });
+    // تفعيل الحساب - استخدم undefined بدلاً من null
+    user.isVerified = true;
+    user.verificationToken = undefined;
+    await user.save();
 
     res.json({
       success: true,
@@ -248,9 +260,9 @@ export const resendVerification = async (req: Request, res: Response) => {
       });
     }
 
-    const user = await User.findOne({ where: { email } });
+    const user = await User.findOne({ email });
     if (!user) {
-      return res.status(404).json({
+      return res.status(400).json({
         success: false,
         message: 'المستخدم غير موجود',
       });
@@ -265,7 +277,8 @@ export const resendVerification = async (req: Request, res: Response) => {
 
     // إنشاء توكن جديد
     const verificationToken = generateToken(Date.now());
-    await user.update({ verificationToken });
+    user.verificationToken = verificationToken;
+    await user.save();
 
     // إرسال البريد باستخدام sendNotificationEmail
     await emailService.sendNotificationEmail(
@@ -300,7 +313,7 @@ export const forgotPassword = async (req: Request, res: Response) => {
       });
     }
 
-    const user = await User.findOne({ where: { email } });
+    const user = await User.findOne({ email });
     if (!user) {
       // لإخفاء وجود المستخدم، نعيد نفس الرسالة
       return res.json({
@@ -314,10 +327,9 @@ export const forgotPassword = async (req: Request, res: Response) => {
     const resetPasswordExpire = new Date(Date.now() + 10 * 60 * 1000); // 10 دقائق
     
     // استخدم as any للتعامل مع null
-    await user.update({
-      resetPasswordToken: resetToken,
-      resetPasswordExpire: resetPasswordExpire,
-    } as any);
+    user.resetPasswordToken = resetToken;
+    user.resetPasswordExpire = resetPasswordExpire;
+    await user.save();
 
     // إرسال البريد
     await emailService.sendPasswordResetEmail(user.email, resetToken);
@@ -356,10 +368,8 @@ export const resetPassword = async (req: Request, res: Response) => {
     }
 
     const user = await User.findOne({
-      where: {
-        resetPasswordToken: token,
-        resetPasswordExpire: { [Op.gt]: new Date() },
-      },
+      resetPasswordToken: token,
+      resetPasswordExpire: { $gt: new Date() },
     });
 
     if (!user) {
@@ -369,12 +379,11 @@ export const resetPassword = async (req: Request, res: Response) => {
       });
     }
 
-    // تحديث كلمة المرور - استخدم as any للتعامل مع null
-    await user.update({
-      password,
-      resetPasswordToken: null as any,
-      resetPasswordExpire: null as any,
-    });
+    // تحديث كلمة المرور
+    user.password = password;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
+    await user.save();
 
     res.json({
       success: true,
@@ -392,9 +401,7 @@ export const resetPassword = async (req: Request, res: Response) => {
 // الحصول على بيانات المستخدم الحالي
 export const getMe = async (req: any, res: Response) => {
   try {
-    const user = await User.findByPk(req.user.id, {
-      attributes: { exclude: ['password', 'verificationToken', 'resetPasswordToken', 'resetPasswordExpire'] },
-    });
+    const user = await User.findById(req.user.id).select('-password -verificationToken -resetPasswordToken -resetPasswordExpire');
 
     if (!user) {
       return res.status(404).json({
@@ -422,7 +429,7 @@ export const updateProfile = async (req: any, res: Response) => {
     const { firstName, lastName, phone, language, avatarUrl } = req.body;
     const userId = req.user.id;
 
-    const user = await User.findByPk(userId);
+    const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -433,7 +440,8 @@ export const updateProfile = async (req: any, res: Response) => {
     // التحقق من رقم الهاتف إذا تم تحديثه
     if (phone && phone !== user.phone) {
       const existingPhone = await User.findOne({
-        where: { phone, id: { [Op.ne]: userId } },
+        phone,
+        _id: { $ne: userId },
       });
       
       if (existingPhone) {
@@ -453,7 +461,8 @@ export const updateProfile = async (req: any, res: Response) => {
       avatarUrl: avatarUrl !== undefined ? (avatarUrl || null) : user.avatarUrl,
     };
 
-    await user.update(updateData);
+    Object.assign(user, updateData);
+    await user.save();
 
     res.json({
       success: true,
@@ -497,7 +506,7 @@ export const changePassword = async (req: any, res: Response) => {
       });
     }
 
-    const user = await User.findByPk(userId);
+    const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -506,7 +515,7 @@ export const changePassword = async (req: any, res: Response) => {
     }
 
     // التحقق من كلمة المرور الحالية
-    const isMatch = await user.comparePassword(currentPassword);
+    const isMatch = await (user as any).comparePassword(currentPassword);
     if (!isMatch) {
       return res.status(400).json({
         success: false,
@@ -515,7 +524,8 @@ export const changePassword = async (req: any, res: Response) => {
     }
 
     // تحديث كلمة المرور
-    await user.update({ password: newPassword });
+    user.password = newPassword;
+    await user.save();
 
     res.json({
       success: true,
@@ -559,15 +569,16 @@ export const updateAvatar = async (req: any, res: Response) => {
       });
     }
 
-    const user = await User.findByPk(userId);
+    const user = await User.findById(userId);
     if (!user) {
-      return res.status(404).json({
+      return res.status(400).json({
         success: false,
         message: 'المستخدم غير موجود',
       });
     }
 
-    await user.update({ avatarUrl: avatarUrl || null });
+    user.avatarUrl = avatarUrl || null;
+    await user.save();
 
     res.json({
       success: true,

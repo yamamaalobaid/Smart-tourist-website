@@ -1,0 +1,6 @@
+[2026-01-30T22:01:58.708Z] GET /api/places?limit=6 body:undefined
+[2026-01-30T22:01:58.816Z] GET /api/places?limit=6 body:undefined
+[2026-01-30T22:02:27.745Z] POST /api/auth/register body:{"firstName":"يمامة","lastName":"محمد","email":"ymoalobaid@gmail.com","password":"12345Memo2003","phone":"0982744862"}
+[2026-01-30T22:02:54.234Z] POST /api/auth/login body:{"password":"password123","email":"admin@damascus.com"}
+[2026-01-30T22:04:41.434Z] POST /api/auth/login body:{"email":"tourist@gmail.com","password":"password123"}
+[2026-01-31T03:47:46.268Z] GET / body:undefined

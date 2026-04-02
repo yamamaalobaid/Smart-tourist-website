@@ -1,307 +1,192 @@
 import { Request, Response } from 'express';
-import { Op, Sequelize } from 'sequelize';
 import { Place, Review, Favorite, PlaceImage, User, Booking } from '../models';
-import notificationService from '../services/notificationService';
 
-// الحصول على جميع الأماكن مع التصفية
+// الحصول على جميع الأماكن مع التصفية والبحث
 export const getPlaces = async (req: Request, res: Response) => {
   try {
     const {
-      page = 1,
-      limit = 20,
+      page = '1',
+      limit = '20',
       category,
       search,
       minRating,
       latitude,
       longitude,
-      radius = 10,
+      radius = '10',
       sortBy = 'rating',
       sortOrder = 'DESC',
     } = req.query;
 
-    const pageNum = parseInt(page as string);
-    const limitNum = parseInt(limit as string);
-    const offset = (pageNum - 1) * limitNum;
+    const pageNum = parseInt(page as string, 10);
+    const limitNum = parseInt(limit as string, 10);
+    const skip = (pageNum - 1) * limitNum;
 
-    const where: any = { isActive: true };
+    const filter: any = { isActive: true };
 
-    // تصفية حسب الفئة
     if (category) {
-      const categories = (category as string).split(',');
-      where.category = { [Op.in]: categories };
+      const categories = (category as string).split(',').map((x) => x.trim());
+      filter.category = { $in: categories };
     }
 
-    // تصفية حسب التقييم
     if (minRating) {
-      where.averageRating = { [Op.gte]: parseFloat(minRating as string) };
+      filter.averageRating = { $gte: parseFloat(minRating as string) };
     }
 
-    // بحث نصي
     if (search) {
-      where[Op.or] = [
-        { nameAr: { [Op.like]: `%${search}%` } },
-        { nameEn: { [Op.like]: `%${search}%` } },
-        { descriptionAr: { [Op.like]: `%${search}%` } },
-        { descriptionEn: { [Op.like]: `%${search}%` } },
-        { addressAr: { [Op.like]: `%${search}%` } },
-        { addressEn: { [Op.like]: `%${search}%` } },
+      const q = new RegExp(search as string, 'i');
+      filter.$or = [
+        { nameAr: q },
+        { nameEn: q },
+        { descriptionAr: q },
+        { descriptionEn: q },
+        { addressAr: q },
+        { addressEn: q },
       ];
     }
 
-    let order: any[] = [];
-    let having: any;
-
-    // تصفية حسب الموقع والمسافة
-    if (latitude && longitude) {
-      const lat = parseFloat(latitude as string);
-      const lng = parseFloat(longitude as string);
-      const radiusKm = parseFloat(radius as string);
-
-      // حساب المسافة باستخدام Haversine formula
-      having = Sequelize.literal(`
-        6371 * ACOS(
-          COS(RADIANS(${lat})) * COS(RADIANS(latitude)) *
-          COS(RADIANS(longitude) - RADIANS(${lng})) +
-          SIN(RADIANS(${lat})) * SIN(RADIANS(latitude))
-        ) <= ${radiusKm}
-      `);
-
-      order.push([
-        Sequelize.literal(`
-          6371 * ACOS(
-            COS(RADIANS(${lat})) * COS(RADIANS(latitude)) *
-            COS(RADIANS(longitude) - RADIANS(${lng})) +
-            SIN(RADIANS(${lat})) * SIN(RADIANS(latitude))
-          )
-        `),
-        'ASC',
-      ]);
+    let sort: any = {};
+    switch (sortBy) {
+      case 'popular':
+        sort = { totalReviews: sortOrder === 'DESC' ? -1 : 1 };
+        break;
+      case 'name':
+        sort = { nameAr: sortOrder === 'DESC' ? -1 : 1 };
+        break;
+      case 'newest':
+        sort = { createdAt: sortOrder === 'DESC' ? -1 : 1 };
+        break;
+      default:
+        sort = { averageRating: sortOrder === 'DESC' ? -1 : 1, totalReviews: -1 };
     }
 
-    // الترتيب حسب الخيار المحدد
-    if (order.length === 0) {
-      switch (sortBy) {
-        case 'rating':
-          order = [['averageRating', sortOrder], ['totalReviews', 'DESC']];
-          break;
-        case 'popular':
-          order = [['totalReviews', sortOrder]];
-          break;
-        case 'name':
-          order = [['nameAr', sortOrder === 'DESC' ? 'DESC' : 'ASC']];
-          break;
-        case 'newest':
-          order = [['createdAt', sortOrder]];
-          break;
-        default:
-          order = [['averageRating', 'DESC'], ['totalReviews', 'DESC']];
+    const totalCount = await Place.countDocuments(filter);
+
+    const places = await Place.find(filter)
+      .sort(sort)
+      .skip(skip)
+      .limit(limitNum)
+      .lean();
+
+    const placeIds = places.map((place: any) => place._id);
+    const images = await PlaceImage.find({ placeId: { $in: placeIds }, isPrimary: true }).lean();
+    const imageMap = images.reduce((acc: any, img: any) => {
+      acc[img.placeId.toString()] = img;
+      return acc;
+    }, {});
+
+    const calcDistance = (lat1: number, lng1: number, lat2: number, lng2: number) => {
+      const R = 6371;
+      const dLat = ((lat2 - lat1) * Math.PI) / 180;
+      const dLon = ((lng2 - lng1) * Math.PI) / 180;
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    };
+
+    const placesWithDistance = places.map((place: any) => {
+      const output: any = {
+        ...place,
+        image: imageMap[place._id.toString()] || null,
+      };
+
+      if (latitude && longitude && place.latitude != null && place.longitude != null) {
+        const userLat = parseFloat(latitude as string);
+        const userLng = parseFloat(longitude as string);
+        const dist = calcDistance(userLat, userLng, place.latitude, place.longitude);
+        output.distance = parseFloat(dist.toFixed(2));
       }
-    }
 
-    const { count, rows } = await Place.findAndCountAll({
-      where,
-      having,
-      limit: limitNum,
-      offset,
-      order,
-      include: [
-        {
-          model: PlaceImage,
-          as: 'images',
-          where: { isPrimary: true },
-          required: false,
-          limit: 1,
-        },
-      ],
-      distinct: true,
+      return output;
     });
 
-    // حساب المسافة لكل مكان إذا كانت الإحداثيات موجودة
-    const placesWithDistance = rows.map(place => {
-      const placeData = place.toJSON();
-      
-      if (latitude && longitude && place.latitude && place.longitude) {
-        const lat = parseFloat(latitude as string);
-        const lng = parseFloat(longitude as string);
-        const placeLat = parseFloat(place.latitude as any);
-        const placeLng = parseFloat(place.longitude as any);
-        
-        // حساب المسافة
-        const R = 6371; // نصف قطر الأرض بالكيلومتر
-        const dLat = (placeLat - lat) * Math.PI / 180;
-        const dLon = (placeLng - lng) * Math.PI / 180;
-        const a = 
-          Math.sin(dLat/2) * Math.sin(dLat/2) +
-          Math.cos(lat * Math.PI / 180) * Math.cos(placeLat * Math.PI / 180) * 
-          Math.sin(dLon/2) * Math.sin(dLon/2);
-        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-        const distance = R * c;
-        
-        return { 
-          ...placeData, 
-          distance: parseFloat(distance.toFixed(2))
-        };
-      }
-      
-      return placeData;
+    const filteredPlaces = placesWithDistance.filter((place: any) => {
+      if (place.distance === undefined || place.distance === null) return true;
+      return parseFloat(radius as string) >= 0 ? place.distance <= parseFloat(radius as string) : true;
     });
 
     res.json({
       success: true,
-      count,
+      count: totalCount,
       pagination: {
         page: pageNum,
         limit: limitNum,
-        totalPages: Math.ceil(count / limitNum),
-        hasNext: pageNum < Math.ceil(count / limitNum),
+        totalPages: Math.ceil(totalCount / limitNum),
+        hasNext: pageNum < Math.ceil(totalCount / limitNum),
         hasPrev: pageNum > 1,
       },
-      data: placesWithDistance,
+      data: filteredPlaces,
     });
   } catch (error: any) {
     console.error('Get places error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء جلب الأماكن',
-    });
+    res.status(500).json({ success: false, message: 'حدث خطأ أثناء جلب الأماكن' });
   }
 };
 
-// الحصول على مكان محدد
 export const getPlaceById = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const userId = (req as any).user?.id;
 
-    const place = await Place.findByPk(id, {
-      include: [
-        {
-          model: PlaceImage,
-          as: 'images',
-          order: [['isPrimary', 'DESC'], ['displayOrder', 'ASC']],
-          separate: true,
-        },
-        {
-          model: Review,
-          as: 'reviews',
-          limit: 10,
-          order: [['createdAt', 'DESC']],
-          include: [{
-            model: User,
-            as: 'user',
-            attributes: ['id', 'firstName', 'lastName', 'avatarUrl']
-          }],
-          separate: true,
-        },
-        {
-          model: Booking,
-          as: 'bookings',
-          where: {
-            status: { [Op.in]: ['confirmed', 'completed'] },
-            bookingDate: { [Op.gte]: new Date(new Date().setDate(new Date().getDate() - 30)) }
-          },
-          attributes: ['id', 'bookingDate', 'numberOfGuests'],
-          required: false,
-          separate: true,
-          limit: 5,
-        }
-      ],
-    });
-
+    const place = await Place.findById(id).lean();
     if (!place) {
-      return res.status(404).json({
-        success: false,
-        message: 'المكان غير موجود',
-      });
+      return res.status(404).json({ success: false, message: 'المكان غير موجود' });
     }
 
-    // التحقق مما إذا كان المكان في المفضلة للمستخدم
+    const images = await PlaceImage.find({ placeId: id }).lean();
+    const reviews = await Review.find({ placeId: id }).sort({ createdAt: -1 }).limit(10).lean();
+    const reviewStatsAgg = await Review.aggregate([
+      { $match: { placeId: new (require('mongoose')).Types.ObjectId(id) } },
+      {
+        $group: {
+          _id: '$placeId',
+          total: { $sum: 1 },
+          average: { $avg: '$rating' },
+          fiveStar: { $sum: { $cond: [{ $eq: ['$rating', 5] }, 1, 0] } },
+          fourStar: { $sum: { $cond: [{ $eq: ['$rating', 4] }, 1, 0] } },
+          threeStar: { $sum: { $cond: [{ $eq: ['$rating', 3] }, 1, 0] } },
+          twoStar: { $sum: { $cond: [{ $eq: ['$rating', 2] }, 1, 0] } },
+          oneStar: { $sum: { $cond: [{ $eq: ['$rating', 1] }, 1, 0] } },
+        },
+      },
+    ]);
+    const reviewStats = reviewStatsAgg[0] || { total: 0, average: 0, fiveStar: 0, fourStar: 0, threeStar: 0, twoStar: 0, oneStar: 0 };
+
+    const similarPlaces = await Place.find({
+      _id: { $ne: id },
+      category: place.category,
+      isActive: true,
+    }).sort({ averageRating: -1 }).limit(4).lean();
+
+    // isFavorite, userReview
     let isFavorite = false;
-    if (userId) {
-      const favorite = await Favorite.findOne({
-        where: { placeId: id, userId }
-      });
-      isFavorite = !!favorite;
-    }
-
-    // الحصول على مراجعة المستخدم إذا كان مسجلاً
     let userReview = null;
     if (userId) {
-      userReview = await Review.findOne({
-        where: { placeId: id, userId },
-        include: [{
-          model: User,
-          as: 'user',
-          attributes: ['id', 'firstName', 'lastName', 'avatarUrl']
-        }]
-      });
+      const fav = await Favorite.findOne({ placeId: id, userId });
+      isFavorite = !!fav;
+      userReview = await Review.findOne({ placeId: id, userId }).lean();
     }
-
-    // الحصول على إحصائيات المراجعات
-    const reviewStats = await Review.findAll({
-      where: { placeId: id },
-      attributes: [
-        [Sequelize.fn('COUNT', Sequelize.col('id')), 'total'],
-        [Sequelize.fn('AVG', Sequelize.col('rating')), 'average'],
-        [Sequelize.literal('SUM(CASE WHEN rating = 5 THEN 1 ELSE 0 END)'), 'fiveStar'],
-        [Sequelize.literal('SUM(CASE WHEN rating = 4 THEN 1 ELSE 0 END)'), 'fourStar'],
-        [Sequelize.literal('SUM(CASE WHEN rating = 3 THEN 1 ELSE 0 END)'), 'threeStar'],
-        [Sequelize.literal('SUM(CASE WHEN rating = 2 THEN 1 ELSE 0 END)'), 'twoStar'],
-        [Sequelize.literal('SUM(CASE WHEN rating = 1 THEN 1 ELSE 0 END)'), 'oneStar'],
-      ],
-      group: ['placeId'],
-      raw: true,
-    });
-
-    // الحصول على أماكن مشابهة
-    const similarPlaces = await Place.findAll({
-      where: {
-        id: { [Op.ne]: id },
-        category: place.category,
-        isActive: true,
-      },
-      include: [{
-        model: PlaceImage,
-        as: 'images',
-        where: { isPrimary: true },
-        required: false,
-        limit: 1,
-      }],
-      order: [['averageRating', 'DESC']],
-      limit: 4,
-    });
-
-    // زيادة عدد المشاهدات
-    await place.increment('viewsCount');
 
     res.json({
       success: true,
       data: {
-        ...place.toJSON(),
+        ...place,
+        images,
+        reviews,
         isFavorite,
         userReview,
-        reviewStats: reviewStats[0] || {
-          total: 0,
-          average: 0,
-          fiveStar: 0,
-          fourStar: 0,
-          threeStar: 0,
-          twoStar: 0,
-          oneStar: 0,
-        },
+        reviewStats,
         similarPlaces,
       },
     });
   } catch (error: any) {
     console.error('Get place by id error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء جلب تفاصيل المكان',
-    });
+    res.status(500).json({ success: false, message: 'حدث خطأ أثناء جلب تفاصيل المكان' });
   }
 };
 
-// إنشاء مكان جديد (للمسؤولين)
 export const createPlace = async (req: any, res: Response) => {
   try {
     const {
@@ -322,15 +207,10 @@ export const createPlace = async (req: any, res: Response) => {
       images,
     } = req.body;
 
-    // التحقق من الحقول المطلوبة
     if (!nameAr || !nameEn || !category) {
-      return res.status(400).json({
-        success: false,
-        message: 'الاسم العربي والإنكليزي والفئة مطلوبة',
-      });
+      return res.status(400).json({ success: false, message: 'الاسم العربي والإنكليزي والفئة مطلوبة' });
     }
 
-    // إنشاء المكان
     const place = await Place.create({
       nameAr,
       nameEn,
@@ -346,13 +226,15 @@ export const createPlace = async (req: any, res: Response) => {
       contactPhone,
       contactEmail,
       website,
-      featuredImage: images?.[0]?.url || null,
+      featuredImage: Array.isArray(images) && images.length > 0 ? images[0].url : undefined,
+      averageRating: 0,
+      totalReviews: 0,
+      isActive: true,
     });
 
-    // حفظ الصور إذا وجدت
     if (images && Array.isArray(images)) {
       const placeImages = images.map((image: any, index: number) => ({
-        placeId: place.id,
+        placeId: place._id,
         imageUrl: image.url,
         captionAr: image.captionAr,
         captionEn: image.captionEn,
@@ -360,120 +242,78 @@ export const createPlace = async (req: any, res: Response) => {
         displayOrder: index,
         uploadedBy: req.user.id,
       }));
-      
-      await PlaceImage.bulkCreate(placeImages);
+      await PlaceImage.insertMany(placeImages);
     }
 
-    res.status(201).json({
-      success: true,
-      message: 'تم إنشاء المكان بنجاح',
-      data: place,
-    });
+    res.status(201).json({ success: true, message: 'تم إنشاء المكان بنجاح', data: place });
   } catch (error: any) {
     console.error('Create place error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء إنشاء المكان',
-    });
+    res.status(500).json({ success: false, message: 'حدث خطأ أثناء إنشاء المكان' });
   }
 };
 
-// تحديث مكان
 export const updatePlace = async (req: any, res: Response) => {
   try {
     const { id } = req.params;
     const updateData = req.body;
 
-    const place = await Place.findByPk(id);
-    if (!place) {
-      return res.status(404).json({
-        success: false,
-        message: 'المكان غير موجود',
-      });
-    }
+    const place = await Place.findById(id);
+    if (!place) return res.status(404).json({ success: false, message: 'المكان غير موجود' });
 
-    // تحديث البيانات
-    await place.update(updateData);
+    Object.assign(place, updateData);
+    await place.save();
 
-    res.json({
-      success: true,
-      message: 'تم تحديث المكان بنجاح',
-      data: place,
-    });
-  } catch (error: any) {
-    console.error('Update place error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء تحديث المكان',
-    });
+    res.json({ success: true, message: 'تم تحديث المكان بنجاح', data: place });
+  } catch (err: any) {
+    console.error('Update place error:', err);
+    res.status(500).json({ success: false, message: 'حدث خطأ أثناء تحديث المكان' });
   }
 };
 
-// حذف مكان (للمسؤولين)
 export const deletePlace = async (req: any, res: Response) => {
   try {
     const { id } = req.params;
+    const place = await Place.findById(id);
+    if (!place) return res.status(404).json({ success: false, message: 'المكان غير موجود' });
 
-    const place = await Place.findByPk(id);
-    if (!place) {
-      return res.status(404).json({
-        success: false,
-        message: 'المكان غير موجود',
-      });
-    }
+    place.isActive = false;
+    await place.save();
 
-    await place.update({ isActive: false });
-
-    res.json({
-      success: true,
-      message: 'تم حذف المكان بنجاح',
-    });
-  } catch (error: any) {
-    console.error('Delete place error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء حذف المكان',
-    });
+    res.json({ success: true, message: 'تم حذف المكان بنجاح' });
+  } catch (err: any) {
+    console.error('Delete place error:', err);
+    res.status(500).json({ success: false, message: 'حدث خطأ أثناء حذف المكان' });
   }
 };
 
-// إضافة مراجعة
+export const getReviews = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const reviews = await Review.find({ placeId: id })
+      .populate('userId', 'firstName lastName avatarUrl')
+      .sort({ createdAt: -1 });
+    res.json({ success: true, data: reviews });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: 'Error fetching reviews' });
+  }
+};
+
 export const addReview = async (req: any, res: Response) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
     const { rating, commentAr, commentEn, visitDate, images } = req.body;
 
-    // التحقق من الحقول المطلوبة
     if (!rating) {
-      return res.status(400).json({
-        success: false,
-        message: 'التقييم مطلوب',
-      });
+      return res.status(400).json({ success: false, message: 'التقييم مطلوب' });
     }
 
-    // التحقق من وجود المكان
-    const place = await Place.findByPk(id);
-    if (!place) {
-      return res.status(404).json({
-        success: false,
-        message: 'المكان غير موجود',
-      });
-    }
+    const place = await Place.findById(id);
+    if (!place) return res.status(404).json({ success: false, message: 'المكان غير موجود' });
 
-    // التحقق من وجود مراجعة سابقة
-    const existingReview = await Review.findOne({
-      where: { placeId: id, userId },
-    });
+    const existingReview = await Review.findOne({ placeId: id, userId });
+    if (existingReview) return res.status(400).json({ success: false, message: 'لديك مراجعة سابقة لهذا المكان' });
 
-    if (existingReview) {
-      return res.status(400).json({
-        success: false,
-        message: 'لديك مراجعة سابقة لهذا المكان',
-      });
-    }
-
-    // إنشاء المراجعة
     const review = await Review.create({
       placeId: id,
       userId,
@@ -481,157 +321,90 @@ export const addReview = async (req: any, res: Response) => {
       commentAr,
       commentEn,
       images: images || [],
-      visitDate: visitDate ? new Date(visitDate) : null,
-      isVerifiedVisit: false, // يمكن التحقق لاحقاً من خلال الحجوزات
+      visitDate: visitDate ? new Date(visitDate) : undefined,
+      isVerifiedVisit: false,
+      helpfulCount: 0,
     });
 
-    res.status(201).json({
-      success: true,
-      message: 'تم إضافة المراجعة بنجاح',
-      data: review,
-    });
-  } catch (error: any) {
-    console.error('Add review error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء إضافة المراجعة',
-    });
+    res.status(201).json({ success: true, message: 'تم إضافة المراجعة بنجاح', data: review });
+  } catch (err: any) {
+    console.error('Add review error:', err);
+    res.status(500).json({ success: false, message: 'حدث خطأ أثناء إضافة المراجعة' });
   }
 };
 
-// تحديث مراجعة
 export const updateReview = async (req: any, res: Response) => {
   try {
     const { id, reviewId } = req.params;
     const userId = req.user.id;
     const updateData = req.body;
 
-    // التحقق من وجود المراجعة
-    const review = await Review.findOne({
-      where: { id: reviewId, placeId: id, userId },
-    });
+    const review = await Review.findOne({ _id: reviewId, placeId: id, userId });
+    if (!review) return res.status(404).json({ success: false, message: 'المراجعة غير موجودة' });
 
-    if (!review) {
-      return res.status(404).json({
-        success: false,
-        message: 'المراجعة غير موجودة',
-      });
-    }
+    Object.assign(review, updateData);
+    await review.save();
 
-    // تحديث المراجعة
-    await review.update(updateData);
-
-    res.json({
-      success: true,
-      message: 'تم تحديث المراجعة بنجاح',
-      data: review,
-    });
-  } catch (error: any) {
-    console.error('Update review error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء تحديث المراجعة',
-    });
+    res.json({ success: true, message: 'تم تحديث المراجعة بنجاح', data: review });
+  } catch (err: any) {
+    console.error('Update review error:', err);
+    res.status(500).json({ success: false, message: 'حدث خطأ أثناء تحديث المراجعة' });
   }
 };
 
-// حذف مراجعة
 export const deleteReview = async (req: any, res: Response) => {
   try {
     const { id, reviewId } = req.params;
     const userId = req.user.id;
 
-    // التحقق من وجود المراجعة
-    const review = await Review.findOne({
-      where: { id: reviewId, placeId: id, userId },
-    });
+    const review = await Review.findOne({ _id: reviewId, placeId: id, userId });
+    if (!review) return res.status(404).json({ success: false, message: 'المراجعة غير موجودة' });
 
-    if (!review) {
-      return res.status(404).json({
-        success: false,
-        message: 'المراجعة غير موجودة',
-      });
-    }
-
-    // حذف المراجعة
-    await review.destroy();
-
-    res.json({
-      success: true,
-      message: 'تم حذف المراجعة بنجاح',
-    });
-  } catch (error: any) {
-    console.error('Delete review error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء حذف المراجعة',
-    });
+    await review.deleteOne();
+    res.json({ success: true, message: 'تم حذف المراجعة بنجاح' });
+  } catch (err: any) {
+    console.error('Delete review error:', err);
+    res.status(500).json({ success: false, message: 'حدث خطأ أثناء حذف المراجعة' });
   }
 };
 
-// إضافة إلى المفضلة
 export const addToFavorites = async (req: any, res: Response) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
     const { category, notes } = req.body;
 
-    // التحقق من وجود المكان
-    const place = await Place.findByPk(id);
-    if (!place) {
-      return res.status(404).json({
-        success: false,
-        message: 'المكان غير موجود',
-      });
+    const place = await Place.findById(id);
+    if (!place) return res.status(404).json({ success: false, message: 'المكان غير موجود' });
+
+    let favorite = await Favorite.findOne({ placeId: id, userId });
+    if (favorite) {
+      favorite.category = category || favorite.category;
+      favorite.notes = notes;
+      await favorite.save();
+      return res.json({ success: true, message: 'تم تحديث المفضلة بنجاح', data: favorite });
     }
 
-    // التحقق من وجود سابق في المفضلة
-    const existingFavorite = await Favorite.findOne({
-      where: { placeId: id, userId },
-    });
-
-    if (existingFavorite) {
-      // إذا كان موجوداً بالفعل، نقوم بتحديثه
-      await existingFavorite.update({ category, notes });
-      
-      return res.json({
-        success: true,
-        message: 'تم تحديث المفضلة بنجاح',
-        data: existingFavorite,
-      });
-    }
-
-    // إضافة إلى المفضلة
-    const favorite = await Favorite.create({
-      placeId: id,
-      userId,
-      category: category || 'favorite',
-      notes,
-    });
-
-    res.status(201).json({
-      success: true,
-      message: 'تم إضافة المكان إلى المفضلة بنجاح',
-      data: favorite,
-    });
-  } catch (error: any) {
-    console.error('Add to favorites error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء إضافة المكان إلى المفضلة',
-    });
+    favorite = await Favorite.create({ placeId: id, userId, category: category || 'favorite', notes });
+    res.status(201).json({ success: true, message: 'تم إضافة المكان إلى المفضلة بنجاح', data: favorite });
+  } catch (err: any) {
+    console.error('Add to favorites error:', err);
+    res.status(500).json({ success: false, message: 'حدث خطأ أثناء إضافة المكان إلى المفضلة' });
   }
 };
 
-// إزالة من المفضلة
 export const removeFromFavorites = async (req: any, res: Response) => {
   try {
     const { id } = req.params;
     const userId = req.user.id;
 
-    // البحث عن المفضلة
-    const favorite = await Favorite.findOne({
-      where: { placeId: id, userId },
-    });
+    const favorite = await Favorite.findOne({ placeId: id, userId });
+    if (!favorite) return res.status(404).json({ success: false, message: 'المكان غير موجود في المفضلة' });
 
-    if (!favorite) {
+    await favorite.deleteOne();
+    res.json({ success: true, message: 'تم إزالة المكان من المفضلة بنجاح' });
+  } catch (err: any) {
+    console.error('Remove from favorites error:', err);
+    res.status(500).json({ success: false, message: 'حدث خطأ أثناء إزالة المكان من المفضلة' });
+  }
+};

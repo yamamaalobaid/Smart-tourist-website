@@ -1,0 +1,11 @@
+Get place by id error: EagerLoadingError [SequelizeEagerLoadingError]: User is associated to Review using an alias. You've included an alias (user), but it does not match the alias(es) defined in your association (User).
+    at Review._getIncludedAssociation (C:\Users\yamom\damascus-tour-guide\backend\node_modules\sequelize\lib\model.js:574:15)
+    at Review._validateIncludedElement (C:\Users\yamom\damascus-tour-guide\backend\node_modules\sequelize\lib\model.js:502:53)
+    at C:\Users\yamom\damascus-tour-guide\backend\node_modules\sequelize\lib\model.js:421:37
+    at Array.map (<anonymous>)
+    at Review._validateIncludedElements (C:\Users\yamom\damascus-tour-guide\backend\node_modules\sequelize\lib\model.js:417:39)
+    at Place._validateIncludedElement (C:\Users\yamom\damascus-tour-guide\backend\node_modules\sequelize\lib\model.js:557:38)
+    at C:\Users\yamom\damascus-tour-guide\backend\node_modules\sequelize\lib\model.js:421:37
+    at Array.map (<anonymous>)
+    at Place._validateIncludedElements (C:\Users\yamom\damascus-tour-guide\backend\node_modules\sequelize\lib\model.js:417:39)
+    at Place.findAll (C:\Users\yamom\damascus-tour-guide\backend\node_modules\sequelize\lib\model.js:1124:12)

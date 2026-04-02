@@ -1,230 +1,128 @@
 import { Request, Response } from 'express';
-import { User, Place, Booking, Review, Chat } from '../models';
-import { Op, Sequelize } from 'sequelize'; // أضف Sequelize هنا
+import User from '../models/User.mongo';
+import Place from '../models/Place.mongo';
+import Booking from '../models/Booking.mongo';
+import Review from '../models/Review.mongo';
 
-// إحصائيات النظام - النسخة النهائية المصححة
-export const getDashboardStats = async (req: any, res: Response) => {
+// --- User Management ---
+
+export const getAllUsers = async (req: Request, res: Response) => {
   try {
-    const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-
-    // إحصائيات المستخدمين
-    const [totalUsers, newUsersThisMonth] = await Promise.all([
-      User.count(),
-      User.count({
-        where: { createdAt: { [Op.gte]: startOfMonth } }
-      })
-    ]);
-
-    // إحصائيات الأماكن
-    const [totalPlaces, activePlaces] = await Promise.all([
-      Place.count(),
-      Place.count({ where: { isActive: true } })
-    ]);
-
-    // إحصائيات الحجوزات
-    const [totalBookings, pendingBookings, confirmedBookings, revenue] = await Promise.all([
-      Booking.count(),
-      Booking.count({ where: { status: 'pending' } }),
-      Booking.count({ where: { status: 'confirmed' } }),
-      Booking.sum('totalAmount', {
-        where: {
-          status: 'confirmed',
-          paymentStatus: 'paid',
-          createdAt: { [Op.gte]: startOfMonth }
-        }
-      }) || 0
-    ]);
-
-    // إحصائيات المراجعات - طريقة آمنة للتحويل
-    const reviews = await Review.findAll({ 
-      attributes: ['rating'],
-      raw: true 
-    });
-    
-    const totalReviews = reviews.length;
-    
-    // حساب مجموع التقييمات مع التحقق من صحة الأرقام
-    let totalRating = 0;
-    let validReviews = 0;
-    
-    reviews.forEach(review => {
-      // تحويل rating إلى number مع التحقق
-      const rating = parseFloat(review.rating as any);
-      
-      // التحقق من أن الرقم صالح وبين 1 و 5
-      if (!isNaN(rating) && rating >= 1 && rating <= 5) {
-        totalRating += rating;
-        validReviews++;
-      }
-    });
-    
-    const averageRating = validReviews > 0 ? (totalRating / validReviews).toFixed(1) : '0.0';
-
-    // إحصائيات المحادثات
-    const activeChats = await Chat.count({ 
-      where: { status: 'active' } 
-    });
-    
-    // استعلام مباشر للمحادثات المعلقة بدون agent
-    const pendingChats = await Chat.findAll({
-      where: { 
-        status: 'pending',
-        [Op.or]: [
-          { agentId: null },
-          { agentId: 0 }
-        ]
-      },
-      raw: true,
-    });
-    
-    const pendingSupport = pendingChats.length;
-
-    // إحصائيات إضافية
-    const newUsersToday = await User.count({
-      where: { createdAt: { [Op.gte]: startOfToday } }
-    });
-
-    const cancelledBookings = await Booking.count({
-      where: { status: 'cancelled' }
-    });
-
-    const completedBookings = await Booking.count({
-      where: { status: 'completed' }
-    });
-
-    res.json({
-      success: true,
-      data: {
-        summary: {
-          totalUsers: Number(totalUsers),
-          totalPlaces: Number(totalPlaces),
-          totalBookings: Number(totalBookings),
-          totalReviews: Number(totalReviews),
-          monthlyRevenue: Number(revenue)
-        },
-        monthly: {
-          newUsers: Number(newUsersThisMonth),
-          newUsersToday: Number(newUsersToday),
-          activePlaces: Number(activePlaces)
-        },
-        bookings: {
-          total: Number(totalBookings),
-          pending: Number(pendingBookings),
-          confirmed: Number(confirmedBookings),
-          cancelled: Number(cancelledBookings),
-          completed: Number(completedBookings),
-          completionRate: totalBookings > 0 ? 
-            ((confirmedBookings / totalBookings) * 100).toFixed(1) + '%' : '0%'
-        },
-        reviews: {
-          total: Number(totalReviews),
-          validReviews: Number(validReviews), // عدد التقييمات الصالحة
-          averageRating,
-          ratingDistribution: await getRatingDistribution()
-        },
-        support: {
-          activeChats: Number(activeChats),
-          pendingSupport: Number(pendingSupport),
-          totalChats: Number(activeChats + pendingSupport)
-        },
-        performance: {
-          userGrowth: totalUsers > 0 ? 
-            ((newUsersThisMonth / totalUsers) * 100).toFixed(1) + '%' : '0%',
-          bookingConversion: totalUsers > 0 ? 
-            ((totalBookings / totalUsers) * 100).toFixed(1) + '%' : '0%',
-          revenuePerBooking: totalBookings > 0 ? 
-            (Number(revenue) / totalBookings).toFixed(2) : '0.00'
-        },
-        timestamp: new Date().toISOString()
-      }
-    });
+    const users = await User.find().select('-password');
+    res.json({ success: true, data: users });
   } catch (error: any) {
-    console.error('Get dashboard stats error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء جلب إحصائيات النظام',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-      timestamp: new Date().toISOString()
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// دالة مساعدة لتوزيع التقييمات
-async function getRatingDistribution() {
+export const updateUser = async (req: Request, res: Response) => {
   try {
-    const reviews = await Review.findAll({
-      attributes: ['rating'],
-      raw: true,
-    });
-    
-    const distribution: Record<string, number> = {
-      '5_stars': 0,
-      '4_stars': 0,
-      '3_stars': 0,
-      '2_stars': 0,
-      '1_star': 0,
-      'invalid': 0 // للمراجعات غير الصالحة
-    };
-    
-    reviews.forEach(review => {
-      // تحويل rating إلى number
-      const ratingNum = parseFloat(review.rating as any);
-      
-      if (!isNaN(ratingNum) && ratingNum >= 1 && ratingNum <= 5) {
-        const roundedRating = Math.round(ratingNum);
-        
-        if (roundedRating === 1) {
-          distribution['1_star']++;
-        } else if (roundedRating === 2) {
-          distribution['2_stars']++;
-        } else if (roundedRating === 3) {
-          distribution['3_stars']++;
-        } else if (roundedRating === 4) {
-          distribution['4_stars']++;
-        } else if (roundedRating === 5) {
-          distribution['5_stars']++;
-        }
-      } else {
-        distribution['invalid']++;
-      }
-    });
-    
-    return distribution;
-  } catch (error) {
-    console.error('Error getting rating distribution:', error);
-    return {
-      '5_stars': 0,
-      '4_stars': 0,
-      '3_stars': 0,
-      '2_stars': 0,
-      '1_star': 0,
-      'invalid': 0
-    };
+    const { id } = req.params;
+    const user = await User.findByIdAndUpdate(id, req.body, { new: true }).select('-password');
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    res.json({ success: true, data: user });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
   }
-}
+};
 
-// دالة إضافية لتحويل rating إلى number بأمان
-function parseRating(rating: any): number | null {
+export const deleteUser = async (req: Request, res: Response) => {
   try {
-    if (rating === null || rating === undefined) {
-      return null;
-    }
-    
-    // إذا كان number بالفعل
-    if (typeof rating === 'number') {
-      return rating >= 1 && rating <= 5 ? rating : null;
-    }
-    
-    // إذا كان string، حاول تحويله
-    if (typeof rating === 'string') {
-      const num = parseFloat(rating);
-      return !isNaN(num) && num >= 1 && num <= 5 ? num : null;
-    }
-    
-    return null;
-  } catch {
-    return null;
+    const { id } = req.params;
+    const user = await User.findByIdAndDelete(id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    res.json({ success: true, message: 'User deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
   }
-}
+};
+
+// --- Place Management ---
+
+export const getAllPlaces = async (req: Request, res: Response) => {
+  try {
+    console.log('@@@ [admin] Fetching all places...');
+    const places = await Place.find();
+    console.log(`@@@ [admin] Found ${places.length} places`);
+    res.json({ success: true, data: places });
+  } catch (error: any) {
+    console.error('@@@ [admin] Error fetching places:', error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const createPlace = async (req: Request, res: Response) => {
+  try {
+    const place = await Place.create(req.body);
+    res.status(201).json({ success: true, data: place });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const updatePlace = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const place = await Place.findByIdAndUpdate(id, req.body, { new: true });
+    if (!place) return res.status(404).json({ success: false, message: 'Place not found' });
+    res.json({ success: true, data: place });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const deletePlace = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const place = await Place.findByIdAndDelete(id);
+    if (!place) return res.status(404).json({ success: false, message: 'Place not found' });
+    res.json({ success: true, message: 'Place deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// --- Review Management ---
+
+export const getAllReviews = async (req: Request, res: Response) => {
+  try {
+    const reviews = await Review.find().populate('userId', 'firstName lastName email').populate('placeId', 'nameAr nameEn');
+    res.json({ success: true, data: reviews });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const deleteReview = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const review = await Review.findByIdAndDelete(id);
+    if (!review) return res.status(404).json({ success: false, message: 'Review not found' });
+    res.json({ success: true, message: 'Review deleted successfully' });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// --- Booking Management ---
+
+export const getAllBookings = async (req: Request, res: Response) => {
+  try {
+    const bookings = await Booking.find().populate('userId', 'firstName lastName email').populate('placeId', 'nameAr nameEn');
+    res.json({ success: true, data: bookings });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const updateBookingStatus = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    const booking = await Booking.findByIdAndUpdate(id, { status }, { new: true });
+    if (!booking) return res.status(404).json({ success: false, message: 'Booking not found' });
+    res.json({ success: true, data: booking });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

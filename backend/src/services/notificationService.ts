@@ -94,7 +94,7 @@ class NotificationService {
     data?: any
   ) {
     try {
-      const user = await User.findByPk(userId);
+      const user = await User.findById(userId);
       if (!user || !user.email) {
         return false;
       }
@@ -164,17 +164,17 @@ class NotificationService {
   // الحصول على إشعارات المستخدم
   async getUserNotifications(userId: number, limit: number = 20, offset: number = 0) {
     try {
-      const { count, rows } = await Notification.findAndCountAll({
-        where: { userId },
-        order: [['createdAt', 'DESC']],
-        limit,
-        offset,
-      });
+      const count = await Notification.countDocuments({ userId });
+      const rows = await Notification.find({ userId })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .skip(offset)
+        .lean();
 
       return {
         notifications: rows,
         total: count,
-        unreadCount: await Notification.count({
+        unreadCount: await Notification.countDocuments({
           where: { userId, isRead: false },
         }),
       };
@@ -192,10 +192,9 @@ class NotificationService {
       });
 
       if (notification && !notification.isRead) {
-        await notification.update({
-          isRead: true,
-          readAt: new Date(),
-        });
+        notification.isRead = true;
+        notification.readAt = new Date();
+        await notification.save();
       }
 
       return notification;
@@ -208,7 +207,7 @@ class NotificationService {
   // تحديث جميع الإشعارات كمقروءة
   async markAllAsRead(userId: number) {
     try {
-      await Notification.update(
+      await Notification.updateMany(
         {
           isRead: true,
           readAt: new Date(),
@@ -341,11 +340,11 @@ class NotificationService {
   // حذف إشعار
   async deleteNotification(notificationId: number, userId: number) {
     try {
-      const result = await Notification.destroy({
+      const result = await Notification.deleteMany({
         where: { id: notificationId, userId },
       });
 
-      return { success: result > 0 };
+      return { success: result.deletedCount > 0 };
     } catch (error) {
       console.error('Error deleting notification:', error);
       throw error;
@@ -355,7 +354,7 @@ class NotificationService {
   // حذف جميع الإشعارات المقروءة
   async deleteReadNotifications(userId: number) {
     try {
-      const result = await Notification.destroy({
+      const result = await Notification.deleteMany({
         where: { userId, isRead: true },
       });
 
@@ -369,7 +368,7 @@ class NotificationService {
   // الحصول على عدد الإشعارات غير المقروءة
   async getUnreadCount(userId: number) {
     try {
-      const count = await Notification.count({
+      const count = await Notification.countDocuments({
         where: { userId, isRead: false },
       });
 

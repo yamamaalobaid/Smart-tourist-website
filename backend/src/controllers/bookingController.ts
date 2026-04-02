@@ -1,7 +1,6 @@
 import { Request, Response } from 'express';
 import { Booking, Place, User, PlaceImage } from '../models';
 import emailService from '../services/emailService';
-import { Op } from 'sequelize';
 
 // إنشاء حجز جديد
 export const createBooking = async (req: any, res: Response) => {
@@ -18,7 +17,7 @@ export const createBooking = async (req: any, res: Response) => {
     }
 
     // التحقق من وجود المكان
-    const place = await Place.findByPk(placeId);
+    const place = await Place.findById(placeId);
     if (!place) {
       return res.status(404).json({
         success: false,
@@ -117,55 +116,41 @@ export const getUserBookings = async (req: any, res: Response) => {
     const limitNum = parseInt(limit as string) || 10;
     const offset = (pageNum - 1) * limitNum;
 
-    const { count, rows: bookings } = await Booking.findAndCountAll({
-      where,
-      include: [
-        {
-          model: Place,
-          as: 'place',
-          attributes: ['id', 'nameAr', 'nameEn', 'category', 'addressAr', 'addressEn', 'featuredImage'],
-          include: [{
-            model: PlaceImage,
-            as: 'images',
-            where: { isPrimary: true },
-            required: false,
-            limit: 1,
-            attributes: ['id', 'imageUrl', 'captionAr', 'captionEn'],
-          }]
-        }
-      ],
-      order: [['createdAt', 'DESC']],
-      limit: limitNum,
-      offset,
-      distinct: true,
-    });
+    const count = await Booking.countDocuments(where);
+    const bookings = await Booking.find(where)
+      .sort({ createdAt: -1 })
+      .skip(offset)
+      .limit(limitNum)
+      .lean();
+
+    const placeIds = bookings.map((booking: any) => booking.placeId);
+    const places = await Place.find({ _id: { $in: placeIds } }).lean();
+    const placeMap = new Map(places.map((p: any) => [p._id.toString(), p]));
 
     // تنسيق البيانات المرتجعة
-    const formattedBookings = bookings.map(booking => {
-      const bookingData = booking.toJSON() as any; // استخدم as any
-      const place = bookingData.place;
-      
+    const formattedBookings = bookings.map((booking: any) => {
+      const place = placeMap.get(booking.placeId.toString());
       return {
-        id: bookingData.id,
-        bookingNumber: bookingData.bookingNumber,
-        serviceType: bookingData.serviceType,
-        bookingDate: bookingData.bookingDate,
-        numberOfGuests: bookingData.numberOfGuests,
-        totalAmount: bookingData.totalAmount,
-        currency: bookingData.currency,
-        status: bookingData.status,
-        paymentStatus: bookingData.paymentStatus,
-        specialRequests: bookingData.specialRequests,
-        createdAt: bookingData.createdAt,
+        id: booking._id,
+        bookingNumber: booking.bookingNumber,
+        serviceType: booking.serviceType,
+        bookingDate: booking.bookingDate,
+        numberOfGuests: booking.numberOfGuests,
+        totalAmount: booking.totalAmount,
+        currency: booking.currency,
+        status: booking.status,
+        paymentStatus: booking.paymentStatus,
+        specialRequests: booking.specialRequests,
+        createdAt: booking.createdAt,
         place: {
-          id: place?.id,
+          id: place?._id,
           nameAr: place?.nameAr,
           nameEn: place?.nameEn,
           category: place?.category,
           addressAr: place?.addressAr,
           addressEn: place?.addressEn,
           featuredImage: place?.featuredImage,
-          mainImage: place?.images && place.images.length > 0 ? place.images[0] : null,
+          mainImage: null,
         }
       };
     });
@@ -198,26 +183,7 @@ export const getBookingById = async (req: any, res: Response) => {
     const { id } = req.params;
     const userId = req.user.id;
 
-    const booking = await Booking.findOne({
-      where: { id, userId },
-      include: [
-        {
-          model: Place,
-          as: 'place',
-          attributes: ['id', 'nameAr', 'nameEn', 'category', 'addressAr', 'addressEn', 
-                      'latitude', 'longitude', 'contactPhone', 'contactEmail', 'website'],
-          include: [
-            {
-              model: PlaceImage,
-              as: 'images',
-              attributes: ['id', 'imageUrl', 'captionAr', 'captionEn', 'isPrimary', 'displayOrder'],
-              order: [['isPrimary', 'DESC'], ['displayOrder', 'ASC']],
-              limit: 10,
-            }
-          ]
-        }
-      ],
-    });
+    const booking = await Booking.findOne({ _id: id, userId }).lean();
 
     if (!booking) {
       return res.status(404).json({
@@ -247,13 +213,7 @@ export const updateBooking = async (req: any, res: Response) => {
     const userId = req.user.id;
     const { numberOfGuests, specialRequests } = req.body;
 
-    const booking = await Booking.findOne({
-      where: { 
-        id, 
-        userId,
-        status: 'pending' // يمكن تحديث الحجوزات المعلقة فقط
-      },
-    });
+    const booking = await Booking.findOne({ _id: id, userId, status: 'pending' });
 
     if (!booking) {
       return res.status(404).json({
@@ -281,7 +241,7 @@ export const updateBooking = async (req: any, res: Response) => {
       
       // إعادة حساب السعر إذا تغير عدد الضيوف
       if (booking.serviceType === 'hotel') {
-        const place = await Place.findByPk(booking.placeId);
+        const place = await Place.findById(booking.placeId);
         if (place) {
           updateData.totalAmount = (place.entryFee || 10000) * numberOfGuests;
         }
@@ -292,7 +252,8 @@ export const updateBooking = async (req: any, res: Response) => {
       updateData.specialRequests = specialRequests || null;
     }
 
-    await booking.update(updateData);
+    booking.set(updateData);
+    await booking.save();
 
     res.json({
       success: true,
@@ -317,16 +278,9 @@ export const cancelBooking = async (req: any, res: Response) => {
     const { cancellationReason } = req.body;
 
     const booking = await Booking.findOne({
-      where: { 
-        id, 
-        userId, 
-        status: { [Op.in]: ['pending', 'confirmed'] } 
-      },
-      include: [{
-        model: Place,
-        as: 'place',
-        attributes: ['nameAr', 'nameEn']
-      }]
+      _id: id,
+      userId,
+      status: { $in: ['pending', 'confirmed'] }
     });
 
     if (!booking) {
@@ -355,16 +309,16 @@ export const cancelBooking = async (req: any, res: Response) => {
       cancelledAt: new Date(),
     };
 
-    await booking.update(updateData);
+    Object.assign(booking, updateData);
+    await booking.save();
 
     // إرسال بريد إلغاء الحجز
     try {
-      // استخدم as any للوصول إلى place
-      const bookingWithPlace = booking as any;
+      const place = await Place.findById(booking.placeId);
       await emailService.sendNotificationEmail(
         req.user.email,
         'تم إلغاء حجزك 🚫',
-        `تم إلغاء حجزك رقم ${booking.bookingNumber} في ${bookingWithPlace.place?.nameAr || 'المكان'}.`,
+        `تم إلغاء حجزك رقم ${booking.bookingNumber} في ${place?.nameAr || 'المكان'}.`,
         `/bookings/${booking.id}`
       );
     } catch (emailError) {
@@ -392,13 +346,7 @@ export const confirmBooking = async (req: any, res: Response) => {
     const { id } = req.params;
     const { paymentMethod, transactionId } = req.body;
 
-    const booking = await Booking.findByPk(id, {
-      include: [{
-        model: User,
-        as: 'user',
-        attributes: ['email', 'firstName', 'lastName']
-      }]
-    });
+    const booking = await Booking.findById(id);
 
     if (!booking) {
       return res.status(404).json({
@@ -423,11 +371,12 @@ export const confirmBooking = async (req: any, res: Response) => {
       confirmedAt: new Date(),
     };
 
-    await booking.update(updateData);
+    booking.set(updateData);
+    await booking.save();
 
     // إرسال بريد التأكيد
     try {
-      const place = await Place.findByPk(booking.placeId);
+      const place = await Place.findById(booking.placeId);
       // استخدم as any للوصول إلى user
       const bookingWithUser = booking as any;
       if (place && bookingWithUser.user?.email) {
@@ -462,7 +411,7 @@ export const completeBooking = async (req: any, res: Response) => {
   try {
     const { id } = req.params;
 
-    const booking = await Booking.findByPk(id);
+    const booking = await Booking.findById(id);
 
     if (!booking) {
       return res.status(404).json({
@@ -495,7 +444,8 @@ export const completeBooking = async (req: any, res: Response) => {
       completedAt: new Date(),
     };
 
-    await booking.update(updateData);
+    booking.set(updateData);
+    await booking.save();
 
     res.json({
       success: true,
@@ -541,12 +491,12 @@ export const getAllBookings = async (req: any, res: Response) => {
 
     // فلترة حسب التاريخ
     if (startDate || endDate) {
-      where.bookingDate = {};
+      where.bookingDate = {} as any;
       if (startDate) {
-        where.bookingDate[Op.gte] = new Date(startDate as string);
+        where.bookingDate.$gte = new Date(startDate as string);
       }
       if (endDate) {
-        where.bookingDate[Op.lte] = new Date(endDate as string);
+        where.bookingDate.$lte = new Date(endDate as string);
       }
     }
 
@@ -554,40 +504,37 @@ export const getAllBookings = async (req: any, res: Response) => {
     const limitNum = parseInt(limit as string) || 20;
     const offset = (pageNum - 1) * limitNum;
 
-    const { count, rows: bookings } = await Booking.findAndCountAll({
-      where,
-      include: [
-        {
-          model: User,
-          as: 'user',
-          attributes: ['id', 'email', 'firstName', 'lastName', 'phone']
-        },
-        {
-          model: Place,
-          as: 'place',
-          attributes: ['id', 'nameAr', 'nameEn', 'category']
-        }
-      ],
-      order: [['createdAt', 'DESC']],
-      limit: limitNum,
-      offset,
-      distinct: true,
-    });
+    const count = await Booking.countDocuments(where);
+    const bookings = await Booking.find(where)
+      .sort({ createdAt: -1 })
+      .skip(offset)
+      .limit(limitNum)
+      .lean();
 
-    // الإحصائيات
+    const userIds = bookings.map((b: any) => b.userId);
+    const placeIds = bookings.map((b: any) => b.placeId);
+    const users = await User.find({ _id: { $in: userIds } }).lean();
+    const places = await Place.find({ _id: { $in: placeIds } }).lean();
+    const userMap = new Map(users.map((u: any) => [u._id.toString(), u]));
+    const placeMap = new Map(places.map((p: any) => [p._id.toString(), p]));
+
     const stats = {
-      total: await Booking.count(),
-      pending: await Booking.count({ where: { status: 'pending' } }),
-      confirmed: await Booking.count({ where: { status: 'confirmed' } }),
-      completed: await Booking.count({ where: { status: 'completed' } }),
-      cancelled: await Booking.count({ where: { status: 'cancelled' } }),
-      totalRevenue: await Booking.sum('totalAmount', { 
-        where: { 
-          status: 'confirmed', 
-          paymentStatus: 'paid' 
-        } 
-      }) || 0,
+      total: await Booking.countDocuments(),
+      pending: await Booking.countDocuments({ status: 'pending' }),
+      confirmed: await Booking.countDocuments({ status: 'confirmed' }),
+      completed: await Booking.countDocuments({ status: 'completed' }),
+      cancelled: await Booking.countDocuments({ status: 'cancelled' }),
+      totalRevenue: ((await Booking.aggregate([
+        { $match: { status: 'confirmed', paymentStatus: 'paid' } },
+        { $group: { _id: null, sum: { $sum: '$totalAmount' } } }
+      ]))?.[0]?.sum) || 0,
     };
+
+    const formattedBookings = bookings.map((booking: any) => ({
+      ...booking,
+      user: userMap.get(booking.userId?.toString()),
+      place: placeMap.get(booking.placeId?.toString()),
+    }));
 
     res.json({
       success: true,
@@ -598,7 +545,7 @@ export const getAllBookings = async (req: any, res: Response) => {
         limit: limitNum,
         totalPages: Math.ceil(count / limitNum),
       },
-      data: bookings,
+      data: formattedBookings,
     });
   } catch (error: any) {
     console.error('Get all bookings error:', error);

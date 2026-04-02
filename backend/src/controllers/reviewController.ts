@@ -1,71 +1,69 @@
 import { Request, Response } from 'express';
-import { Review, Place, User, Booking } from '../models';
-import { Op, Sequelize } from 'sequelize'; // أضف Sequelize هنا// الحصول على مراجعات مكان
+import { Review, Place, User } from '../models';
+
+// الحصول على مراجعات مكان
 export const getPlaceReviews = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { page = 1, limit = 10, rating, sortBy = 'newest' } = req.query;
 
-    const where: any = { placeId: id };
+    const filter: any = { placeId: id };
     if (rating) {
-      where.rating = rating;
+      filter.rating = parseInt(rating as string);
     }
 
-    const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
+    const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
+    const pageSize = Math.max(1, parseInt(limit as string, 10) || 10);
+    const skip = (pageNum - 1) * pageSize;
 
-    let order: any[] = [];
+    let sortCondition: any = { createdAt: -1 };
     switch (sortBy) {
       case 'newest':
-        order = [['createdAt', 'DESC']];
+        sortCondition = { createdAt: -1 };
         break;
       case 'oldest':
-        order = [['createdAt', 'ASC']];
+        sortCondition = { createdAt: 1 };
         break;
       case 'highest':
-        order = [['rating', 'DESC'], ['helpfulCount', 'DESC']];
+        sortCondition = { rating: -1, helpfulCount: -1 };
         break;
       case 'lowest':
-        order = [['rating', 'ASC'], ['helpfulCount', 'DESC']];
+        sortCondition = { rating: 1, helpfulCount: -1 };
         break;
       case 'helpful':
-        order = [['helpfulCount', 'DESC'], ['createdAt', 'DESC']];
+        sortCondition = { helpfulCount: -1, createdAt: -1 };
         break;
       default:
-        order = [['createdAt', 'DESC']];
+        sortCondition = { createdAt: -1 };
     }
 
-    const { count, rows: reviews } = await Review.findAndCountAll({
-      where,
-      include: [
-        {
-          model: User,
-          as: 'user',
-          attributes: ['id', 'firstName', 'lastName', 'avatarUrl', 'createdAt']
-        }
-      ],
-      order,
-      limit: parseInt(limit as string),
-      offset,
-    });
+    const count = await Review.countDocuments(filter);
+    const reviews = await Review.find(filter)
+      .populate('user', 'firstName lastName avatarUrl createdAt')
+      .sort(sortCondition)
+      .skip(skip)
+      .limit(pageSize)
+      .lean();
 
     // الحصول على إحصائيات التقييم
-    const ratingStats = await Review.findAll({
-      where: { placeId: id },
-      attributes: [
-        'rating',
-        [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']
-      ],
-      group: ['rating'],
-      order: [['rating', 'DESC']],
-    });
+    const ratingStats = await Review.aggregate([
+      { $match: { placeId: id } },
+      {
+        $group: {
+          _id: '$rating',
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { _id: -1 } }
+    ]);
 
     res.json({
       success: true,
       count,
       pagination: {
-        page: parseInt(page as string),
-        limit: parseInt(limit as string),
-        totalPages: Math.ceil(count / parseInt(limit as string)),
+        page: pageNum,
+        limit: pageSize,
+        totalPages: Math.ceil(count / pageSize),
       },
       ratingStats,
       data: reviews,
@@ -85,29 +83,26 @@ export const getUserReviews = async (req: any, res: Response) => {
     const userId = req.user.id;
     const { page = 1, limit = 10 } = req.query;
 
-    const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
+    const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
+    const pageSize = Math.max(1, parseInt(limit as string, 10) || 10);
+    const skip = (pageNum - 1) * pageSize;
 
-    const { count, rows: reviews } = await Review.findAndCountAll({
-      where: { userId },
-      include: [
-        {
-          model: Place,
-          as: 'place',
-          attributes: ['id', 'nameAr', 'nameEn', 'category', 'featuredImage']
-        }
-      ],
-      order: [['createdAt', 'DESC']],
-      limit: parseInt(limit as string),
-      offset,
-    });
+    const filter = { userId };
+    const count = await Review.countDocuments(filter);
+    const reviews = await Review.find(filter)
+      .populate('place', 'nameAr nameEn category featuredImage')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(pageSize)
+      .lean();
 
     res.json({
       success: true,
       count,
       pagination: {
-        page: parseInt(page as string),
-        limit: parseInt(limit as string),
-        totalPages: Math.ceil(count / parseInt(limit as string)),
+        page: pageNum,
+        limit: pageSize,
+        totalPages: Math.ceil(count / pageSize),
       },
       data: reviews,
     });

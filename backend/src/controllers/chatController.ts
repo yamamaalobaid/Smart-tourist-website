@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
-import { Chat, Message, User } from '../models';
-import { Op } from 'sequelize';
+import { Chat, Message, User, IChat, IMessage } from '../models';
 
 // =============================================
 // دوال مساعدة لإنشاء السجلات
@@ -14,14 +13,14 @@ const createChatRecord = async (chatData: {
   agentId: number | null;
   subject: string;
   status: 'pending' | 'active' | 'closed' | 'resolved';
-}): Promise<Chat> => {
+}): Promise<IChat> => {
   const fullChatData = {
     ...chatData,
     lastMessageAt: new Date(),
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  
+
   return await Chat.create(fullChatData as any);
 };
 
@@ -33,7 +32,7 @@ const createMessageRecord = async (messageData: {
   senderId: number;
   content: string;
   messageType: 'text' | 'file' | 'system';
-}): Promise<Message> => {
+}): Promise<IMessage> => {
   const fullMessageData = {
     ...messageData,
     isRead: false,
@@ -41,7 +40,7 @@ const createMessageRecord = async (messageData: {
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-  
+
   return await Message.create(fullMessageData as any);
 };
 
@@ -57,26 +56,20 @@ export const getUserChats = async (req: any, res: Response) => {
     const userId = req.user.id;
     const { status } = req.query;
 
-    const where: any = { [Op.or]: [{ userId }, { agentId: userId }] };
+    const filter: any = { $or: [{ userId }, { agentId: userId }] };
     if (status) {
-      where.status = status;
+      filter.status = status;
     }
 
-    const chats = await Chat.findAll({
-      where,
-      include: [
-        { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName', 'avatarUrl'] },
-        { model: User, as: 'agent', attributes: ['id', 'firstName', 'lastName', 'avatarUrl'] },
-        {
-          model: Message,
-          as: 'messages',
-          limit: 1,
-          order: [['createdAt', 'DESC']],
-          separate: true,
-        },
-      ],
-      order: [['lastMessageAt', 'DESC']],
-    });
+    const chats = await Chat.find(filter)
+      .populate('user', 'firstName lastName avatarUrl')
+      .populate('agent', 'firstName lastName avatarUrl')
+      .populate({
+        path: 'messages',
+        options: { sort: { createdAt: -1 }, limit: 1 }
+      })
+      .sort({ lastMessageAt: -1 })
+      .lean();
 
     res.json({
       success: true,
@@ -99,15 +92,11 @@ export const getChat = async (req: any, res: Response) => {
     const userId = req.user.id;
 
     const chat = await Chat.findOne({
-      where: {
-        id,
-        [Op.or]: [{ userId }, { agentId: userId }],
-      },
-      include: [
-        { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName', 'avatarUrl'] },
-        { model: User, as: 'agent', attributes: ['id', 'firstName', 'lastName', 'avatarUrl'] },
-      ],
-    });
+      _id: id,
+      $or: [{ userId }, { agentId: userId }],
+    })
+      .populate('user', 'id firstName lastName avatarUrl')
+      .populate('agent', 'id firstName lastName avatarUrl');
 
     if (!chat) {
       return res.status(404).json({
@@ -117,25 +106,15 @@ export const getChat = async (req: any, res: Response) => {
     }
 
     // الحصول على الرسائل
-    const messages = await Message.findAll({
-      where: { chatId: id },
-      include: [
-        { model: User, as: 'sender', attributes: ['id', 'firstName', 'lastName', 'avatarUrl'] },
-      ],
-      order: [['createdAt', 'ASC']],
-      limit: 100,
-    });
+    const messages = await Message.find({ chatId: id })
+      .populate('sender', 'id firstName lastName avatarUrl')
+      .sort({ createdAt: 1 })
+      .limit(100);
 
     // تحديث الرسائل كمقروءة
-    await Message.update(
-      { isRead: true, readAt: new Date() },
-      {
-        where: {
-          chatId: id,
-          senderId: { [Op.ne]: userId },
-          isRead: false,
-        },
-      }
+    await Message.updateMany(
+      { chatId: id, senderId: { $ne: userId }, isRead: false },
+      { isRead: true, readAt: new Date() }
     );
 
     res.json({
@@ -163,11 +142,9 @@ export const startChat = async (req: any, res: Response) => {
 
     // التحقق من وجود محادثة سابقة
     const existingChat = await Chat.findOne({
-      where: {
-        userId,
-        agentId,
-        status: 'active',
-      },
+      userId,
+      agentId,
+      status: 'active',
     });
 
     if (existingChat) {
@@ -206,12 +183,13 @@ export const closeChat = async (req: any, res: Response) => {
     const { id } = req.params;
     const userId = req.user.id;
 
-    const chat = await Chat.findOne({
-      where: {
-        id,
-        [Op.or]: [{ userId }, { agentId: userId }],
+    const chat = await Chat.findOneAndUpdate(
+      {
+        _id: id,
+        $or: [{ userId }, { agentId: userId }],
       },
-    });
+      { status: 'closed' }
+    );
 
     if (!chat) {
       return res.status(404).json({
@@ -219,8 +197,6 @@ export const closeChat = async (req: any, res: Response) => {
         message: 'المحادثة غير موجودة',
       });
     }
-
-    await chat.update({ status: 'closed' });
 
     res.json({
       success: true,
@@ -241,20 +217,13 @@ export const getSupportChats = async (req: any, res: Response) => {
   try {
     const { status = 'pending' } = req.query;
 
-    const chats = await Chat.findAll({
-      where: { status, agentId: null },
-      include: [
-        { model: User, as: 'user', attributes: ['id', 'firstName', 'lastName', 'avatarUrl'] },
-        {
-          model: Message,
-          as: 'messages',
-          limit: 1,
-          order: [['createdAt', 'DESC']],
-          separate: true,
-        },
-      ],
-      order: [['createdAt', 'DESC']],
-    });
+    const chats = await Chat.find({ status, agentId: null })
+      .populate('user', 'id firstName lastName avatarUrl')
+      .populate({
+        path: 'messages',
+        options: { sort: { createdAt: -1 }, limit: 1 }
+      })
+      .sort({ createdAt: -1 });
 
     res.json({
       success: true,
@@ -276,7 +245,7 @@ export const acceptSupportChat = async (req: any, res: Response) => {
     const { id } = req.params;
     const agentId = req.user.id;
 
-    const chat = await Chat.findByPk(id);
+    const chat = await Chat.findByIdAndUpdate(id, { agentId, status: 'active' });
     if (!chat) {
       return res.status(404).json({
         success: false,
@@ -290,8 +259,6 @@ export const acceptSupportChat = async (req: any, res: Response) => {
         message: 'المحادثة مقبولة بالفعل',
       });
     }
-
-    await chat.update({ agentId, status: 'active' });
 
     // إرسال رسالة ترحيبية باستخدام الدالة المساعدة
     await createMessageRecord({
@@ -324,11 +291,9 @@ export const sendMessage = async (req: any, res: Response) => {
 
     // التحقق من وجود المحادثة
     const chat = await Chat.findOne({
-      where: {
-        id,
-        [Op.or]: [{ userId }, { agentId: userId }],
-        status: 'active',
-      },
+      _id: id,
+      $or: [{ userId }, { agentId: userId }],
+      status: 'active',
     });
 
     if (!chat) {
@@ -347,14 +312,10 @@ export const sendMessage = async (req: any, res: Response) => {
     });
 
     // تحديث وقت آخر رسالة في المحادثة
-    await chat.update({ lastMessageAt: new Date() });
+    await Chat.findByIdAndUpdate(id, { lastMessageAt: new Date() });
 
     // تضمين معلومات المرسل
-    const messageWithSender = await Message.findByPk(message.id, {
-      include: [
-        { model: User, as: 'sender', attributes: ['id', 'firstName', 'lastName', 'avatarUrl'] },
-      ],
-    });
+    const messageWithSender = await Message.findById(message._id).populate('sender', 'id firstName lastName avatarUrl');
 
     res.status(201).json({
       success: true,
@@ -378,10 +339,8 @@ export const markMessagesAsRead = async (req: any, res: Response) => {
 
     // التحقق من وجود المحادثة
     const chat = await Chat.findOne({
-      where: {
-        id,
-        [Op.or]: [{ userId }, { agentId: userId }],
-      },
+      _id: id,
+      $or: [{ userId }, { agentId: userId }],
     });
 
     if (!chat) {
@@ -392,20 +351,14 @@ export const markMessagesAsRead = async (req: any, res: Response) => {
     }
 
     // تحديث الرسائل كمقروءة
-    const result = await Message.update(
-      { isRead: true, readAt: new Date() },
-      {
-        where: {
-          chatId: id,
-          senderId: { [Op.ne]: userId },
-          isRead: false,
-        },
-      }
+    const result = await Message.updateMany(
+      { chatId: id, senderId: { $ne: userId }, isRead: false },
+      { isRead: true, readAt: new Date() }
     );
 
     res.json({
       success: true,
-      message: `تم تحديث ${result[0]} رسالة كمقروءة`,
+      message: `تم تحديث ${result.modifiedCount} رسالة كمقروءة`,
     });
   } catch (error: any) {
     res.status(500).json({
@@ -424,10 +377,8 @@ export const deleteChat = async (req: any, res: Response) => {
     const userId = req.user.id;
 
     const chat = await Chat.findOne({
-      where: {
-        id,
-        [Op.or]: [{ userId }, { agentId: userId }],
-      },
+      _id: id,
+      $or: [{ userId }, { agentId: userId }],
     });
 
     if (!chat) {
@@ -438,10 +389,10 @@ export const deleteChat = async (req: any, res: Response) => {
     }
 
     // حذف الرسائل أولاً (إذا كان هناك علاقة حذف متتالي)
-    await Message.destroy({ where: { chatId: id } });
-    
+    await Message.deleteMany({ chatId: id });
+
     // ثم حذف المحادثة
-    await chat.destroy();
+    await Chat.findOneAndDelete({ _id: id });
 
     res.json({
       success: true,

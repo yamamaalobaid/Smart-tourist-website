@@ -1,9 +1,5 @@
 import { Request, Response } from 'express';
 import { Favorite, Place, PlaceImage } from '../models';
-import { Op, Sequelize } from 'sequelize'; // أضف Sequelize هنا
-
-// أو استيراد sequelize من config
-import sequelize from '../config/database';
 
 // الحصول على المفضلة
 export const getFavorites = async (req: any, res: Response) => {
@@ -11,55 +7,56 @@ export const getFavorites = async (req: any, res: Response) => {
     const userId = req.user.id;
     const { category, page = 1, limit = 20 } = req.query;
 
-    const where: any = { userId };
+    const filter: any = { userId };
     if (category) {
-      where.category = category;
+      filter.category = category;
     }
 
-    const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
+    const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
+    const limitNum = Math.max(1, parseInt(limit as string, 10) || 20);
+    const offset = (pageNum - 1) * limitNum;
 
-    const { count, rows: favorites } = await Favorite.findAndCountAll({
-      where,
-      include: [
-        {
-          model: Place,
-          as: 'place',
-          where: { isActive: true },
-          include: [{
-            model: PlaceImage,
-            as: 'images',
-            where: { isPrimary: true },
-            required: false,
-            limit: 1,
-          }]
-        }
-      ],
-      order: [['createdAt', 'DESC']],
-      limit: parseInt(limit as string),
-      offset,
+    const count = await Favorite.countDocuments(filter);
+    const favorites = await Favorite.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(offset)
+      .limit(limitNum)
+      .lean();
+
+    const placeIds = favorites.map((fav: any) => fav.placeId);
+    const places = await Place.find({ _id: { $in: placeIds }, isActive: true }).lean();
+    const placeMap = new Map(places.map((p: any) => [p._id.toString(), p]));
+
+    const images = await PlaceImage.find({ placeId: { $in: placeIds }, isPrimary: true }).lean();
+    const imageMap = new Map(images.map((img: any) => [img.placeId.toString(), img]));
+
+    const formattedFavorites = favorites.map((fav: any) => {
+      const place = placeMap.get(fav.placeId?.toString());
+      return {
+        ...fav,
+        place: place ? {
+          ...place,
+          mainImage: imageMap.get(place._id.toString()) || null,
+        } : null,
+      };
     });
 
-    // تجميع حسب الفئة - استخدم Sequelize من الاستيراد
-    const byCategory = await Favorite.findAll({
-      where: { userId },
-      attributes: [
-        'category',
-        [Sequelize.fn('COUNT', Sequelize.col('id')), 'count']
-      ],
-      group: ['category'],
-      raw: true,
-    });
+    const byCategoryAgg = await Favorite.aggregate([
+      { $match: { userId: userId } },
+      { $group: { _id: '$category', count: { $sum: 1 } } },
+      { $project: { _id: 0, category: '$_id', count: 1 } }
+    ]);
 
     res.json({
       success: true,
       count,
-      byCategory,
+      byCategory: byCategoryAgg,
       pagination: {
-        page: parseInt(page as string),
-        limit: parseInt(limit as string),
-        totalPages: Math.ceil(count / parseInt(limit as string)),
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(count / limitNum),
       },
-      data: favorites,
+      data: formattedFavorites,
     });
   } catch (error: any) {
     console.error('Get favorites error:', error);

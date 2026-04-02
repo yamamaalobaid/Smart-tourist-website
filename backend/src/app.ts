@@ -3,91 +3,89 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
-import { sequelize } from './models'; // ✅ استيراد من models/index
+import connectDB from './config/database.mongo';
+import { seedDatabase } from './seeders/seedDatabaseFixed';
 import authRoutes from './routes/authRoutes';
 import placeRoutes from './routes/placeRoutes';
+import favoriteRoutes from './routes/favoriteRoutes';
+import bookingRoutes from './routes/bookingRoutes';
+import chatRoutes from './routes/chatRoutes';
+import itineraryRoutes from './routes/itineraryRoutes';
+import travelAssistantRoutes from './routes/travelAssistantRoutes';
+import adminRoutes from './routes/adminRoutes';
 
 dotenv.config();
 
-const app = express();
-const PORT = process.env.PORT || 5000;
+process.on('uncaughtException', (err: any) => {
+  console.error('❌ Uncaught exception:', err && (err.stack || err));
+  process.exit(1);
+});
 
-// Middleware
+process.on('unhandledRejection', (reason: any) => {
+  console.error('❌ Unhandled rejection:', reason && (reason.stack || reason));
+  process.exit(1);
+});
+
+const app = express();
+const PORT = parseInt(process.env.PORT || '5000', 10);
+
 app.use(cors());
 app.use(helmet());
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Routes
+// Register routes
 app.use('/api/auth', authRoutes);
-app.use('/api/places', placeRoutes); // ✅ أضف هذا السطر
+app.use('/api/places', placeRoutes);
+app.use('/api/favorites', favoriteRoutes);
+app.use('/api/bookings', bookingRoutes);
+app.use('/api/chat', chatRoutes);
+app.use('/api/itineraries', itineraryRoutes);
+app.use('/api/utility', travelAssistantRoutes);
+app.use('/api/admin', adminRoutes);
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'OK',
-    timestamp: new Date().toISOString(),
-    service: 'Damascus Tourism API'
-  });
-});
+app.get('/health', (_req, res) => res.json({ status: 'OK', timestamp: new Date().toISOString() }));
 
-// Home endpoint
-app.get('/', (req, res) => {
-  res.json({
-    message: 'Welcome to Damascus Tourism API',
-    version: '1.0.0',
-    endpoints: {
-      auth: '/api/auth',
-      places: '/api/places'
-    }
-  });
-});
+app.get('/', (_req, res) => res.json({ message: 'Welcome to Damascus Tourism API', version: '1.0.0' }));
 
-// Error handling middleware
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error(err.stack);
-  res.status(500).json({
-    success: false,
-    message: 'Something went wrong!',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
+// Error handler
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('ERROR:', err && (err.stack || err));
+  res.status(500).json({ success: false, message: 'Internal server error' });
 });
 
 // 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Route not found',
-    requestedUrl: req.originalUrl
-  });
-});
+app.use((_req, res) => res.status(404).json({ success: false, message: 'Route not found' }));
 
-// Start server with database connection
-const startServer = async () => {
+async function startServer() {
   try {
-    // Test database connection
-    await sequelize.authenticate();
-    console.log('✅ Database connection established successfully.');
+    await connectDB();
 
-    // Sync models (in development only)
-    if (process.env.NODE_ENV === 'development') {
-      await sequelize.sync({ alter: true });
-      console.log('✅ Database synced');
+    const env = process.env.NODE_ENV || 'development';
+    if (env === 'development' && process.env.SEED_DATABASE === 'true') {
+      console.log('[app] seeding database (if enabled)');
+      await seedDatabase();
+      console.log('[app] seeding complete');
     }
 
-    // Start the server
-    app.listen(PORT, () => {
-      console.log(`🚀 Server is running on port ${PORT}`);
-      console.log(`📁 Environment: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`🔗 http://localhost:${PORT}`);
+    const server = app.listen(PORT, () => {
+      console.log(`🚀 Server listening on http://localhost:${PORT}`);
     });
 
-  } catch (error) {
-    console.error('❌ Unable to start server:', error);
+    server.on('error', (err: any) => {
+      console.error('[app] server error', err);
+      process.exit(1);
+    });
+
+    // keep process alive in some environments
+    if (server && server.ref) server.ref();
+    process.stdin && process.stdin.resume();
+  } catch (err: any) {
+    console.error('[app] failed to start', err && (err.stack || err));
     process.exit(1);
   }
-};
+}
 
 startServer();
 

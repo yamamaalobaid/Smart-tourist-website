@@ -1,6 +1,18 @@
 import { Request, Response } from 'express';
-import { Place, Review, PlaceImage } from '../models';
-import { Op, Sequelize } from 'sequelize';
+import { Place, PlaceImage } from '../models';
+
+const calculateDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const toRad = (deg: number) => deg * (Math.PI / 180);
+  const R = 6371; // Earth radius km
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
 
 // بحث متقدم في الأماكن
 export const advancedSearch = async (req: Request, res: Response) => {
@@ -15,133 +27,141 @@ export const advancedSearch = async (req: Request, res: Response) => {
       latitude,
       longitude,
       radius = 5,
-      amenities,
       sortBy = 'relevance',
       page = 1,
       limit = 20,
     } = req.query;
 
-    const where: any = { isActive: true };
-    const having: any = {};
+    const filter: any = { isActive: true };
 
-    // البحث النصي
     if (query) {
-      where[Op.or] = [
-        { nameAr: { [Op.like]: `%${query}%` } },
-        { nameEn: { [Op.like]: `%${query}%` } },
-        { descriptionAr: { [Op.like]: `%${query}%` } },
-        { descriptionEn: { [Op.like]: `%${query}%` } },
-        { addressAr: { [Op.like]: `%${query}%` } },
-        { addressEn: { [Op.like]: `%${query}%` } },
+      const regex = new RegExp(String(query), 'i');
+      filter.$or = [
+        { nameAr: regex },
+        { nameEn: regex },
+        { descriptionAr: regex },
+        { descriptionEn: regex },
+        { addressAr: regex },
+        { addressEn: regex },
       ];
     }
 
-    // تصفية حسب الفئات
     if (categories) {
-      const categoryList = (categories as string).split(',');
-      where.category = { [Op.in]: categoryList };
+      filter.category = { $in: (categories as string).split(',') };
     }
 
-    // تصفية حسب التقييم
     if (minRating || maxRating) {
-      const ratingWhere: any = {};
-      if (minRating) ratingWhere[Op.gte] = parseFloat(minRating as string);
-      if (maxRating) ratingWhere[Op.lte] = parseFloat(maxRating as string);
-      where.averageRating = ratingWhere;
+      filter.averageRating = {};
+      if (minRating) filter.averageRating.$gte = parseFloat(minRating as string);
+      if (maxRating) filter.averageRating.$lte = parseFloat(maxRating as string);
     }
 
-    // تصفية حسب السعر
     if (minPrice || maxPrice) {
-      const priceWhere: any = {};
-      if (minPrice) priceWhere[Op.gte] = parseFloat(minPrice as string);
-      if (maxPrice) priceWhere[Op.lte] = parseFloat(maxPrice as string);
-      where.entryFee = priceWhere;
+      filter.entryFee = {};
+      if (minPrice) filter.entryFee.$gte = parseFloat(minPrice as string);
+      if (maxPrice) filter.entryFee.$lte = parseFloat(maxPrice as string);
     }
 
-    // تصفية حسب المسافة
-    if (latitude && longitude) {
-      const lat = parseFloat(latitude as string);
-      const lng = parseFloat(longitude as string);
-      const radiusKm = parseFloat(radius as string);
+    const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
+    const pageSize = Math.max(1, parseInt(limit as string, 10) || 20);
+    const skip = (pageNum - 1) * pageSize;
 
-      having.distance = Sequelize.literal(`
-        6371 * ACOS(
-          COS(RADIANS(${lat})) * COS(RADIANS(latitude)) *
-          COS(RADIANS(longitude) - RADIANS(${lng})) +
-          SIN(RADIANS(${lat})) * SIN(RADIANS(latitude))
-        ) <= ${radiusKm}
-      `);
+    let sortCondition: any = { averageRating: -1, totalReviews: -1 };
+    const includeDistance = latitude !== undefined && longitude !== undefined;
+    let currentLat = 0;
+    let currentLon = 0;
+    let queryRadius = Number(radius);
+
+    if (includeDistance) {
+      currentLat = parseFloat(latitude as string);
+      currentLon = parseFloat(longitude as string);
     }
 
-    let order: any[] = [];
-    
-    // تحديد الترتيب
     switch (sortBy) {
       case 'distance':
-        if (latitude && longitude) {
-          order.push([
-            Sequelize.literal(`
-              6371 * ACOS(
-                COS(RADIANS(${latitude})) * COS(RADIANS(latitude)) *
-                COS(RADIANS(longitude) - RADIANS(${longitude})) +
-                SIN(RADIANS(${latitude})) * SIN(RADIANS(latitude))
-              )
-            `),
-            'ASC'
-          ]);
+        if (includeDistance) {
+          sortCondition = { distance: 1 };
         }
         break;
       case 'rating':
-        order = [['averageRating', 'DESC'], ['totalReviews', 'DESC']];
+        sortCondition = { averageRating: -1, totalReviews: -1 };
         break;
       case 'price_low':
-        order = [['entryFee', 'ASC']];
+        sortCondition = { entryFee: 1 };
         break;
       case 'price_high':
-        order = [['entryFee', 'DESC']];
+        sortCondition = { entryFee: -1 };
         break;
       case 'popular':
-        order = [['totalReviews', 'DESC'], ['viewsCount', 'DESC']];
+        sortCondition = { totalReviews: -1 };
         break;
-      default: // relevance
-        if (query) {
-          order = [
-            [Sequelize.literal(`CASE WHEN nameAr LIKE '%${query}%' THEN 1 ELSE 0 END`), 'DESC'],
-            [Sequelize.literal(`CASE WHEN nameEn LIKE '%${query}%' THEN 1 ELSE 0 END`), 'DESC'],
-            ['averageRating', 'DESC'],
-          ];
-        } else {
-          order = [['averageRating', 'DESC'], ['totalReviews', 'DESC']];
-        }
+      default:
+        sortCondition = { averageRating: -1, totalReviews: -1 };
+        break;
     }
 
-    const offset = (parseInt(page as string) - 1) * parseInt(limit as string);
+    const count = await Place.countDocuments(filter);
+    let places = await Place.find(filter)
+      .skip(skip)
+      .limit(pageSize)
+      .lean();
 
-    const { count, rows: places } = await Place.findAndCountAll({
-      where,
-      having,
-      include: [{
-        model: PlaceImage,
-        as: 'images',
-        where: { isPrimary: true },
-        required: false,
-        limit: 1,
-      }],
-      order,
-      limit: parseInt(limit as string),
-      offset,
-      subQuery: false,
-    });
+    if (includeDistance) {
+      places = places.map((place: any) => {
+        if (place.latitude != null && place.longitude != null) {
+          place.distance = calculateDistanceKm(currentLat, currentLon, place.latitude, place.longitude);
+        } else {
+          place.distance = Number.MAX_VALUE;
+        }
+        return place;
+      });
+
+      if (queryRadius >= 0) {
+        places = places.filter((place: any) => place.distance <= queryRadius);
+      }
+    }
+
+    if (sortBy === 'distance' && includeDistance) {
+      places.sort((a: any, b: any) => (a.distance || 0) - (b.distance || 0));
+    } else if (sortBy === 'relevance' && query) {
+      places.sort((a: any, b: any) => {
+        const aScore = ((a.nameAr?.toLowerCase().includes(String(query).toLowerCase()) ? 1 : 0) +
+                         (a.nameEn?.toLowerCase().includes(String(query).toLowerCase()) ? 1 : 0));
+        const bScore = ((b.nameAr?.toLowerCase().includes(String(query).toLowerCase()) ? 1 : 0) +
+                         (b.nameEn?.toLowerCase().includes(String(query).toLowerCase()) ? 1 : 0));
+        if (aScore !== bScore) return bScore - aScore;
+        if (a.averageRating !== b.averageRating) return b.averageRating - a.averageRating;
+        return b.totalReviews - a.totalReviews;
+      });
+    } else {
+      places.sort((a: any, b: any) => {
+        for (const key of Object.keys(sortCondition)) {
+          const direction = sortCondition[key] === 1 ? 1 : -1;
+          if ((a[key] ?? 0) < (b[key] ?? 0)) return -direction;
+          if ((a[key] ?? 0) > (b[key] ?? 0)) return direction;
+        }
+        return 0;
+      });
+    }
+
+    const placeIds = places.map((place: any) => place._id);
+    const primaryImages = await PlaceImage.find({ placeId: { $in: placeIds }, isPrimary: true }).lean();
+    const imageMap = new Map(primaryImages.map((img: any) => [img.placeId.toString(), img]));
+
+    const placesWithImages = places.map((place: any) => ({
+      ...place,
+      images: imageMap.has(place._id.toString()) ? [imageMap.get(place._id.toString())] : [],
+    }));
 
     res.json({
       success: true,
       count,
       pagination: {
-        page: parseInt(page as string),
-        limit: parseInt(limit as string),
-        totalPages: Math.ceil(count / parseInt(limit as string)),
+        page: pageNum,
+        limit: pageSize,
+        totalPages: Math.ceil(count / pageSize),
       },
-      data: places,
+      data: placesWithImages,
     });
   } catch (error: any) {
     console.error('Advanced search error:', error);
