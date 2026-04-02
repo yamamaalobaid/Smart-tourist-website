@@ -28,9 +28,11 @@ const generateToken = (id: number): string => {
 export const register = async (req: Request, res: Response) => {
   try {
     const { email, password, firstName, lastName, phone } = req.body;
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : email;
+    const normalizedPhone = typeof phone === 'string' ? phone.trim() : phone;
 
     // التحقق من الحقول المطلوبة
-    if (!email || !password) {
+    if (!normalizedEmail || !password) {
       return res.status(400).json({
         success: false,
         message: 'يرجى إدخال البريد الإلكتروني وكلمة المرور',
@@ -39,7 +41,7 @@ export const register = async (req: Request, res: Response) => {
 
     // التحقق من صحة البريد الإلكتروني
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
+    if (!emailRegex.test(normalizedEmail)) {
       return res.status(400).json({
         success: false,
         message: 'صيغة البريد الإلكتروني غير صحيحة',
@@ -55,17 +57,17 @@ export const register = async (req: Request, res: Response) => {
     }
 
     // التحقق من وجود المستخدم
-    const existingUser = await User.findOne({
-      $or: [
-        { email },
-        { phone: phone || null }
-      ]
-    });
+    const duplicateChecks: any[] = [{ email: normalizedEmail }];
+    if (normalizedPhone) {
+      duplicateChecks.push({ phone: normalizedPhone });
+    }
+
+    const existingUser = await User.findOne({ $or: duplicateChecks });
 
     if (existingUser) {
       return res.status(400).json({
         success: false,
-        message: existingUser.email === email 
+        message: existingUser.email === normalizedEmail 
           ? 'البريد الإلكتروني مسجل مسبقاً'
           : 'رقم الهاتف مسجل مسبقاً',
       });
@@ -80,11 +82,11 @@ export const register = async (req: Request, res: Response) => {
 
     // إنشاء المستخدم مع جميع الحقول المطلوبة
     const user = await User.create({
-      email,
+      email: normalizedEmail,
       password,
       firstName: firstName || null,
       lastName: lastName || null,
-      phone: phone || null,
+      phone: normalizedPhone || null,
       language: 'ar', // القيمة الافتراضية
       isVerified: isVerified, // مفعّل في development
       verificationToken: verificationToken,
@@ -136,13 +138,19 @@ export const register = async (req: Request, res: Response) => {
 // تسجيل الدخول
 export const login = async (req: Request, res: Response) => {
   const { email, password, phone } = req.body || {};
+  const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  const normalizedPhone = typeof phone === 'string' ? phone.trim() : '';
   
   try {
-    if ((!email && !phone) || !password) {
+    if ((!normalizedEmail && !normalizedPhone) || !password) {
       return res.status(400).json({ success: false, message: 'email/phone and password required' });
     }
 
-    const user: any = await (User as any).findOne({ $or: [ { email }, { phone } ] }) as any;
+    const loginConditions: any[] = [];
+    if (normalizedEmail) loginConditions.push({ email: normalizedEmail });
+    if (normalizedPhone) loginConditions.push({ phone: normalizedPhone });
+
+    const user: any = await (User as any).findOne({ $or: loginConditions }) as any;
     if (!user) {
       return res.status(401).json({ success: false, message: 'invalid credentials' });
     }

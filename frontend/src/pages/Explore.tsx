@@ -17,7 +17,7 @@ export default function Explore() {
   const [loading, setLoading] = useState(true);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [nearRadiusKm, setNearRadiusKm] = useState<number>(5);
-  const [searchTerm, setSearchTerm] = useState(searchParams.get('q') || '');
+  const [searchTerm, setSearchTerm] = useState(searchParams.get('q') || searchParams.get('search') || '');
   const [category, setCategory] = useState(searchParams.get('category') || 'all');
   const [sortBy, setSortBy] = useState<SortBy>('rating');
   const [priceRange, setPriceRange] = useState<PriceRange>('all');
@@ -26,17 +26,17 @@ export default function Explore() {
 
   const categories = [
     { id: 'all', name: 'جميع الأماكن', icon: <Map className="w-5 h-5"/> },
-    { id: 'historical', name: 'مواقع تاريخية', icon: <Compass className="w-5 h-5"/> },
-    { id: 'religious', name: 'مواقع دينية', icon: <Star className="w-5 h-5"/> },
+    { id: 'historic', name: 'مواقع تاريخية', icon: <Compass className="w-5 h-5"/> },
+    { id: 'mosque,church', name: 'مواقع دينية', icon: <Star className="w-5 h-5"/> },
     { id: 'museum', name: 'متاحف', icon: <MapPin className="w-5 h-5"/> },
-    { id: 'garden', name: 'حدائق ومنتزهات', icon: <Compass className="w-5 h-5"/> },
+    { id: 'park,garden', name: 'حدائق ومنتزهات', icon: <Compass className="w-5 h-5"/> },
     { id: 'market', name: 'أسواق تقليدية', icon: <DollarSign className="w-5 h-5"/> },
     { id: 'restaurant', name: 'مطاعم', icon: <Star className="w-5 h-5"/> },
   ];
 
   useEffect(() => {
     fetchPlaces();
-  }, [category, sortBy, minRating, priceRange, userLocation, nearRadiusKm]);
+  }, [category, sortBy, minRating, priceRange, userLocation, nearRadiusKm, searchTerm]);
 
   useEffect(() => {
     try {
@@ -71,7 +71,10 @@ export default function Explore() {
           p.nameEn.toLowerCase().includes(searchTerm.toLowerCase())
         );
       }
-      if (category !== 'all') filtered = filtered.filter((p: Place) => p.category === category);
+       if (category !== 'all') {
+         const allowedCategories = category.split(',').map((item) => item.trim());
+         filtered = filtered.filter((p: Place) => allowedCategories.includes(p.category));
+       }
       if (minRating > 0) filtered = filtered.filter((p: Place) => p.averageRating >= minRating);
       if (priceRange !== 'all') {
         filtered = filtered.filter((p: Place) => {
@@ -167,7 +170,11 @@ export default function Explore() {
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    setSearchParams({ q: searchTerm, category });
+    const params: Record<string, string> = {};
+    if (searchTerm) params.q = searchTerm;
+    if (category && category !== 'all') params.category = category;
+    setSearchParams(params);
+    fetchPlaces();
   };
 
   const clearFilters = () => {
