@@ -1,28 +1,16 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import { useAuthStore } from '../store/authStore';
-import apiClient from '../services/api';
+import bookingService, { BookingRecord } from '../services/bookings';
 import { motion } from 'framer-motion';
 import { Calendar, AlertCircle, CalendarClock, Users, Trash2 } from 'lucide-react';
 
-interface Booking {
-  id: number;
-  placeId: number;
-  placeName: string;
-  startDate: string;
-  endDate: string;
-  guests: number;
-  totalPrice: number;
-  status: 'pending' | 'confirmed' | 'cancelled' | 'completed';
-  notes: string;
-  createdAt: string;
-}
-
 export default function Bookings() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user } = useAuthStore();
-  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [bookings, setBookings] = useState<BookingRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filter, setFilter] = useState<'all' | 'pending' | 'confirmed' | 'completed'>('all');
@@ -39,9 +27,16 @@ export default function Bookings() {
   const fetchBookings = async () => {
     try {
       setLoading(true);
-      const response = await apiClient.get('/bookings');
-      setBookings(response.data);
-      setError('');
+      const data = await bookingService.list();
+      const paymentStatus = searchParams.get('payment');
+      setBookings(data);
+      if (paymentStatus === 'success') {
+        setError('');
+      } else if (paymentStatus === 'cancelled') {
+        setError('تم إلغاء عملية الدفع قبل اكتمالها');
+      } else {
+        setError('');
+      }
     } catch (err: any) {
       setError(err.response?.data?.message || 'فشل في جلب الحجوزات');
     } finally {
@@ -49,12 +44,12 @@ export default function Bookings() {
     }
   };
 
-  const handleCancel = async (bookingId: number) => {
+  const handleCancel = async (bookingId: string) => {
     if (!window.confirm('هل أنت متأكد من إلغاء هذا الحجز؟')) return;
 
     try {
-      await apiClient.put(`/bookings/${bookingId}`, { status: 'cancelled' });
-      setBookings(bookings.map(b => b.id === bookingId ? { ...b, status: 'cancelled' } : b));
+      const cancelled = await bookingService.cancel(bookingId);
+      setBookings(bookings.map(b => b.id === bookingId ? cancelled : b));
     } catch (err: any) {
       setError(err.response?.data?.message || 'فشل إلغاء الحجز');
     }

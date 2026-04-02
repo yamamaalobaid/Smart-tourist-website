@@ -1,24 +1,42 @@
 import { Request, Response } from 'express';
-import { Booking, Place, User } from '../models';
+import Stripe from 'stripe';
+import { Booking, Place } from '../models';
 
-// حل مشكلة Stripe module - استخدم require بدلاً من import
-const StripeLib = require('stripe');
-
-// تحقق من وجود STRIPE_SECRET_KEY
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
-if (!stripeSecretKey) {
-  console.error('STRIPE_SECRET_KEY is not defined in environment variables');
-}
-
-// إنشاء instance من Stripe
-const stripe = stripeSecretKey ? new StripeLib(stripeSecretKey, {
-  apiVersion: '2023-10-16',
+const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, {
+  apiVersion: '2023-10-16' as any,
 }) : null;
 
-// إنشاء جلسة دفع
+const frontendBaseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+const serializePaymentDetails = (booking: any, place?: any) => ({
+  id: booking._id?.toString?.() || booking.id,
+  bookingNumber: booking.bookingNumber,
+  totalAmount: booking.totalAmount,
+  currency: booking.currency,
+  paymentStatus: booking.paymentStatus,
+  paymentMethod: booking.paymentMethod,
+  status: booking.status,
+  placeName: place?.nameAr || place?.nameEn || 'مكان سياحي',
+  placeImage: place?.featuredImage,
+  bookingDate: booking.bookingDate,
+  startDate: booking.startDate || booking.bookingDate,
+  endDate: booking.endDate || booking.startDate || booking.bookingDate,
+  serviceType: booking.serviceType,
+  canPay: booking.status === 'pending' && booking.paymentStatus === 'pending',
+  requiresPayment: booking.status === 'pending',
+});
+
+const getBookingWithPlace = async (bookingId: string) => {
+  const booking = await Booking.findById(bookingId).lean();
+  if (!booking) return null;
+
+  const place = await Place.findById(booking.placeId).lean();
+  return { booking, place };
+};
+
 export const createPaymentSession = async (req: any, res: Response) => {
   try {
-    // تحقق من تهيئة Stripe
     if (!stripe) {
       return res.status(500).json({
         success: false,
@@ -27,124 +45,88 @@ export const createPaymentSession = async (req: any, res: Response) => {
     }
 
     const { bookingId, currency = 'syp' } = req.body;
-    const userId = req.user.id;
+    const userId = String(req.user.id);
 
-    // الحصول على معلومات الحجز
-    const booking = await Booking.findById(bookingId)
-      .populate('place', 'nameAr nameEn featuredImage entryFee')
-      .populate('user', 'email firstName lastName')
-      .lean();
-
-    if (!booking) {
+    const result = await getBookingWithPlace(bookingId);
+    if (!result) {
       return res.status(404).json({
         success: false,
         message: 'الحجز غير موجود',
       });
     }
 
-    // استخدم type assertion للوصول إلى الحقول
-    const bookingData = booking as any;
-    
-    // تحقق من ملكية الحجز
-    if (bookingData.userId !== userId) {
+    const { booking, place } = result;
+
+    if (String(booking.userId) !== userId) {
       return res.status(403).json({
         success: false,
         message: 'غير مصرح بالوصول لهذا الحجز',
       });
     }
 
-    // تحقق من أن الحجز معلق
-    if (bookingData.status !== 'pending') {
+    if (booking.status !== 'pending' || booking.paymentStatus !== 'pending') {
       return res.status(400).json({
         success: false,
         message: 'الحجز غير قابل للدفع',
-        currentStatus: bookingData.status,
       });
     }
 
-    if (!bookingData.place) {
-      return res.status(400).json({
-        success: false,
-        message: 'بيانات المكان غير متوفرة',
-      });
-    }
-
-    // تحويل العملة إذا لزم الأمر
-    let amount = bookingData.totalAmount;
+    let amount = booking.totalAmount;
     let stripeCurrency: 'usd' | 'syp' = 'syp';
-    
-    if (currency.toLowerCase() === 'usd') {
-      // سعر الصرف (يمكن جعله ديناميكياً)
-      amount = Math.round(bookingData.totalAmount / 4500); // مثال: 1 دولار = 4500 ليرة
+
+    if (String(currency).toLowerCase() === 'usd') {
+      amount = Math.max(0.5, Math.round(booking.totalAmount / 4500));
       stripeCurrency = 'usd';
+    } else {
+      amount = Math.max(1000, booking.totalAmount);
     }
 
-    // تحقق من الحد الأدنى للدفع (50 سنت أو 1000 ليرة)
-    const minAmount = stripeCurrency === 'usd' ? 0.5 : 1000;
-    if (amount < minAmount) {
-      amount = minAmount;
-    }
+    const unitAmount = stripeCurrency === 'usd'
+      ? Math.round(amount * 100)
+      : Math.round(amount);
 
-    // تحويل المبلغ لساتش (Stripe يتطلب المبلغ بالسنتات)
-    const amountInCents = Math.round(amount * 100);
-
-    // إنشاء جلسة دفع في Stripe
     const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
       payment_method_types: ['card'],
+      customer_email: req.user.email,
       line_items: [
         {
+          quantity: 1,
           price_data: {
             currency: stripeCurrency,
+            unit_amount: unitAmount,
             product_data: {
-              name: bookingData.place.nameAr || 'حجز سياحي',
-              description: `حجز ${bookingData.serviceType} - ${new Date(bookingData.bookingDate).toLocaleDateString('ar-SA')}`,
-              images: bookingData.place.featuredImage ? [bookingData.place.featuredImage] : [],
-              metadata: {
-                bookingId: bookingData.id.toString(),
-              },
+              name: place?.nameAr || place?.nameEn || 'حجز سياحي',
+              description: `حجز ${booking.serviceType} - ${new Date(booking.bookingDate).toLocaleDateString('ar-SA')}`,
+              images: place?.featuredImage ? [place.featuredImage] : [],
             },
-            unit_amount: amountInCents,
           },
-          quantity: 1,
         },
       ],
-      mode: 'payment',
-      success_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/booking/success?session_id={CHECKOUT_SESSION_ID}&booking_id=${bookingData.id}`,
-      cancel_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/booking/cancel?booking_id=${bookingData.id}`,
-      customer_email: bookingData.user?.email,
+      success_url: `${frontendBaseUrl}/bookings?payment=success&booking_id=${booking._id}`,
+      cancel_url: `${frontendBaseUrl}/bookings?payment=cancelled&booking_id=${booking._id}`,
       metadata: {
-        bookingId: bookingData.id.toString(),
-        userId: userId.toString(),
-        bookingNumber: bookingData.bookingNumber,
-        amount: amount.toString(),
-        currency: stripeCurrency,
-        serviceType: bookingData.serviceType,
+        bookingId: String(booking._id),
+        userId,
+        bookingNumber: booking.bookingNumber,
       },
-      payment_intent_data: {
-        metadata: {
-          bookingId: bookingData.id.toString(),
-          userId: userId.toString(),
-          bookingNumber: bookingData.bookingNumber,
-        },
-      },
-    }); 
+    });
 
-    res.json({
+    return res.json({
       success: true,
       sessionId: session.id,
       url: session.url,
       paymentData: {
         amount,
         currency: stripeCurrency,
-        bookingNumber: bookingData.bookingNumber,
-        placeName: bookingData.place.nameAr,
-        bookingDate: bookingData.bookingDate,
-        amountInCents,
-      }
-    }); 
+        bookingNumber: booking.bookingNumber,
+        placeName: place?.nameAr || place?.nameEn,
+        bookingDate: booking.bookingDate,
+      },
+    });
   } catch (error: any) {
     console.error('Create payment session error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: 'حدث خطأ أثناء إنشاء جلسة الدفع',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
@@ -152,572 +134,92 @@ export const createPaymentSession = async (req: any, res: Response) => {
   }
 };
 
-// webhook للدفع (يتطلب raw body parser)
 export const stripeWebhook = async (req: Request, res: Response) => {
   try {
-    // تحقق من تهيئة Stripe
     if (!stripe) {
-      console.error('Stripe not initialized');
       return res.status(500).json({ error: 'Payment service not configured' });
     }
 
-    const sig = req.headers['stripe-signature'] as string;
-    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    const signature = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-    if (!endpointSecret) {
-      console.error('STRIPE_WEBHOOK_SECRET is not defined');
+    if (!signature || !webhookSecret) {
       return res.status(500).json({ error: 'Webhook configuration error' });
     }
 
-    let event;
-    let rawBody: Buffer;
+    let event: Stripe.Event;
 
     try {
-      // في Express، قد نحتاج للحصول على raw body
-      if ((req as any).rawBody) {
-        rawBody = (req as any).rawBody;
-      } else {
-        rawBody = Buffer.from(JSON.stringify(req.body));
-      }
-
-      event = stripe.webhooks.constructEvent(rawBody, sig, endpointSecret);
-    } catch (err: any) {
-      console.error('Webhook signature verification failed:', err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    // معالجة أنواع الأحداث المختلفة
-    try {
-      switch (event.type) {
-        case 'checkout.session.completed':
-          await handleCheckoutSessionCompleted(event.data.object);
-          break;
-          
-        case 'checkout.session.expired':
-          await handleCheckoutSessionExpired(event.data.object);
-          break;
-          
-        case 'payment_intent.succeeded':
-          await handlePaymentIntentSucceeded(event.data.object);
-          break;
-          
-        case 'payment_intent.payment_failed':
-          await handlePaymentIntentFailed(event.data.object);
-          break;
-          
-        case 'payment_intent.canceled':
-          await handlePaymentIntentCanceled(event.data.object);
-          break;
-          
-        default:
-          console.log(`Unhandled event type: ${event.type}`);
-      }
-
-      res.json({ received: true, handled: true }); 
+      event = stripe.webhooks.constructEvent(req.body, signature, webhookSecret);
     } catch (error: any) {
-      console.error('Error handling webhook event:', error);
-      res.status(500).json({ error: 'Failed to handle webhook event' });
-    }
-  } catch (error: any) {
-    console.error('Stripe webhook error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-};
-
-// معالجة اكتمال جلسة الدفع
-const handleCheckoutSessionCompleted = async (session: any) => {
-  try {
-    const bookingId = session.metadata?.bookingId;
-    const userId = session.metadata?.userId;
-
-    if (!bookingId || !userId) {
-      console.error('Missing metadata in session:', session.id);
-      return;
+      return res.status(400).send(`Webhook Error: ${error.message}`);
     }
 
-    const booking = await Booking.findById(bookingId);
-    if (booking) {
-      const updateData: any = {
-        paymentStatus: 'paid',
-        status: 'confirmed',
-        paymentMethod: 'stripe',
-        transactionId: session.payment_intent || session.id,
-        confirmedAt: new Date(),
-      };
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const bookingId = session.metadata?.bookingId;
 
-      Object.assign(booking, updateData);
-      await booking.save();
-
-      console.log(`✅ Payment confirmed for booking ${bookingId}, user ${userId}`);
-
-      // إرسال إشعار للمستخدم (يمكنك تفعيل هذا لاحقاً)
-      // await sendPaymentConfirmationNotification(parseInt(userId), booking);
-    }
-  } catch (error) {
-    console.error('Error handling checkout session completed:', error);
-  }
-};
-
-// معالجة انتهاء صلاحية جلسة الدفع
-const handleCheckoutSessionExpired = async (session: any) => {
-  try {
-    const bookingId = session.metadata?.bookingId;
-    
-    if (bookingId) {
-      const booking = await Booking.findById(bookingId);
-      if (booking && booking.status === 'pending') {
-        Object.assign(booking, {
-          status: 'cancelled',
-          cancellationReason: 'انتهاء صلاحية جلسة الدفع',
-          cancelledAt: new Date(),
-        });
-        await booking.save();
-        
-        console.log(`⏰ Booking ${bookingId} cancelled due to expired payment session`);
-      }
-    }
-  } catch (error) {
-    console.error('Error handling expired payment session:', error);
-  }
-};
-
-// معالجة نجاح payment intent
-const handlePaymentIntentSucceeded = async (paymentIntent: any) => {
-  try {
-    const bookingId = paymentIntent.metadata?.bookingId;
-    
-    if (bookingId) {
-      const booking = await Booking.findById(bookingId);
-      if (booking && booking.paymentStatus === 'pending') {
-        Object.assign(booking, {
+      if (bookingId) {
+        await Booking.findByIdAndUpdate(bookingId, {
           paymentStatus: 'paid',
-          transactionId: paymentIntent.id,
+          status: 'confirmed',
+          paymentMethod: 'stripe',
+          transactionId: session.payment_intent?.toString?.() || session.id,
+          confirmedAt: new Date(),
         });
-        
-        console.log(`✅ Payment intent succeeded for booking ${bookingId}`);
       }
     }
-  } catch (error) {
-    console.error('Error handling payment intent succeeded:', error);
-  }
-};
 
-// معالجة فشل payment intent
-const handlePaymentIntentFailed = async (paymentIntent: any) => {
-  try {
-    const bookingId = paymentIntent.metadata?.bookingId;
-    
-    if (bookingId) {
-      const booking = await Booking.findById(bookingId);
-      if (booking && booking.status === 'pending') {
-        Object.assign(booking, {
+    if (event.type === 'checkout.session.expired') {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const bookingId = session.metadata?.bookingId;
+
+      if (bookingId) {
+        await Booking.findByIdAndUpdate(bookingId, {
           paymentStatus: 'failed',
-          cancellationReason: 'فشل في عملية الدفع',
+          cancellationReason: 'انتهت صلاحية جلسة الدفع',
         });
-        
-        console.log(`❌ Payment failed for booking ${bookingId}`);
       }
     }
+
+    return res.json({ received: true });
   } catch (error) {
-    console.error('Error handling payment intent failed:', error);
+    console.error('Stripe webhook error:', error);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 };
 
-// معالجة إلغاء payment intent
-const handlePaymentIntentCanceled = async (paymentIntent: any) => {
-  try {
-    const bookingId = paymentIntent.metadata?.bookingId;
-    
-    if (bookingId) {
-      const booking = await Booking.findById(bookingId);
-      if (booking && booking.status === 'pending') {
-        Object.assign(booking, {
-          paymentStatus: 'cancelled',
-          cancellationReason: 'تم إلغاء عملية الدفع',
-          cancelledAt: new Date(),
-        });
-        
-        console.log(`🚫 Payment canceled for booking ${bookingId}`);
-      }
-    }
-  } catch (error) {
-    console.error('Error handling payment intent canceled:', error);
-  }
-};
-
-// الحصول على تفاصيل الدفع
 export const getPaymentDetails = async (req: any, res: Response) => {
   try {
     const { bookingId } = req.params;
-    const userId = req.user.id;
+    const userId = String(req.user.id);
 
-    const booking = await Booking.findOne({ _id: bookingId, userId })
-      .populate('place', 'id nameAr nameEn featuredImage');
-
-    if (!booking) {
+    const result = await getBookingWithPlace(bookingId);
+    if (!result) {
       return res.status(404).json({
         success: false,
         message: 'الحجز غير موجود',
       });
     }
 
-    // استخدم type assertion
-    const bookingData = booking as any;
+    const { booking, place } = result;
 
-    res.json({
-      success: true,
-      data: {
-        id: bookingData.id,
-        bookingNumber: bookingData.bookingNumber,
-        totalAmount: bookingData.totalAmount,
-        currency: bookingData.currency,
-        paymentStatus: bookingData.paymentStatus,
-        paymentMethod: bookingData.paymentMethod,
-        status: bookingData.status,
-        placeName: bookingData.place?.nameAr,
-        placeImage: bookingData.place?.featuredImage,
-        bookingDate: bookingData.bookingDate,
-        serviceType: bookingData.serviceType,
-        canPay: bookingData.status === 'pending' && bookingData.paymentStatus === 'pending',
-        requiresPayment: bookingData.status === 'pending',
-      },
-    }); 
-  } catch (error: any) {
-    console.error('Get payment details error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء جلب تفاصيل الدفع',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-    }); 
-  }
-};
-
-// التحقق من حالة الدفع
-export const verifyPayment = async (req: any, res: Response) => {
-  try {
-    // تحقق من تهيئة Stripe
-    if (!stripe) {
-      return res.status(500).json({
-        success: false,
-        message: 'خدمة الدفع غير متوفرة حالياً',
-      });
-    }
-
-    const { sessionId } = req.body;
-
-    if (!sessionId) {
-      return res.status(400).json({
-        success: false,
-        message: 'معرف الجلسة مطلوب',
-      });
-    }
-
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
-
-    res.json({
-      success: true,
-      data: {
-        paymentStatus: session.payment_status,
-        status: session.status,
-        amount: session.amount_total ? session.amount_total / 100 : 0,
-        currency: session.currency,
-        customerEmail: session.customer_email,
-        customerName: session.customer_details?.name,
-        bookingId: session.metadata?.bookingId,
-        bookingNumber: session.metadata?.bookingNumber,
-      },
-    });
-  } catch (error: any) {
-    console.error('Verify payment error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء التحقق من حالة الدفع',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-    });
-  }
-};
-
-// إنشاء payment intent مباشر (للتطبيقات المحلية)
-export const createPaymentIntent = async (req: any, res: Response) => {
-  try {
-    // تحقق من تهيئة Stripe
-    if (!stripe) {
-      return res.status(500).json({
-        success: false,
-        message: 'خدمة الدفع غير متوفرة حالياً',
-      });
-    }
-
-    const { bookingId, currency = 'syp' } = req.body;
-    const userId = req.user.id;
-
-    const booking = await Booking.findById(bookingId, {
-      include: [{ 
-        model: Place, 
-        as: 'place',
-        attributes: ['nameAr', 'nameEn'] 
-      }],
-    });
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'الحجز غير موجود',
-      });
-    }
-
-    const bookingData = booking as any;
-    
-    // تحقق من ملكية الحجز
-    if (bookingData.userId !== userId) {
+    if (String(booking.userId) !== userId) {
       return res.status(403).json({
         success: false,
-        message: 'غير مصرح',
+        message: 'غير مصرح بالوصول لهذا الحجز',
       });
     }
 
-    // تحقق من حالة الحجز
-    if (bookingData.status !== 'pending') {
-      return res.status(400).json({
-        success: false,
-        message: 'الحجز غير قابل للدفع',
-        currentStatus: bookingData.status,
-      });
-    }
-
-    // حساب المبلغ
-    let amount = bookingData.totalAmount;
-    let stripeCurrency: 'usd' | 'syp' = 'syp';
-    
-    if (currency.toLowerCase() === 'usd') {
-      amount = Math.round(bookingData.totalAmount / 4500);
-      stripeCurrency = 'usd';
-    }
-
-    const minAmount = stripeCurrency === 'usd' ? 0.5 : 1000;
-    if (amount < minAmount) {
-      amount = minAmount;
-    }
-
-    // إنشاء payment intent
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(amount * 100),
-      currency: stripeCurrency,
-      metadata: {
-        bookingId: bookingData.id.toString(),
-        userId: userId.toString(),
-        bookingNumber: bookingData.bookingNumber,
-        placeName: bookingData.place?.nameAr || 'مكان سياحي',
-      },
-      description: `دفع حجز ${bookingData.bookingNumber}`,
-    });
-
-    res.json({
+    return res.json({
       success: true,
-      clientSecret: paymentIntent.client_secret,
-      paymentIntentId: paymentIntent.id,
-      publishableKey: process.env.STRIPE_PUBLISHABLE_KEY,
-      data: {
-        amount,
-        currency: stripeCurrency,
-        bookingNumber: bookingData.bookingNumber,
-        placeName: bookingData.place?.nameAr,
-      }
+      data: serializePaymentDetails(booking, place),
     });
   } catch (error: any) {
-    console.error('Create payment intent error:', error);
-    res.status(500).json({
+    console.error('Get payment details error:', error);
+    return res.status(500).json({
       success: false,
-      message: 'حدث خطأ أثناء إنشاء نية الدفع',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-    });
-  }
-};
-
-// إلغاء الدفع
-export const cancelPayment = async (req: any, res: Response) => {
-  try {
-    // تحقق من تهيئة Stripe
-    if (!stripe) {
-      return res.status(500).json({
-        success: false,
-        message: 'خدمة الدفع غير متوفرة حالياً',
-      });
-    }
-
-    const { paymentIntentId } = req.body;
-
-    if (!paymentIntentId) {
-      return res.status(400).json({
-        success: false,
-        message: 'معرف نية الدفع مطلوب',
-      });
-    }
-
-    const paymentIntent = await stripe.paymentIntents.cancel(paymentIntentId);
-
-    res.json({
-      success: true,
-      message: 'تم إلغاء الدفع بنجاح',
-      data: {
-        status: paymentIntent.status,
-        cancelledAt: new Date().toISOString(),
-        paymentIntentId: paymentIntent.id,
-      },
-    });
-  } catch (error: any) {
-    console.error('Cancel payment error:', error);
-    
-    // إذا كان الدفع قد تم بالفعل
-    if (error.code === 'payment_intent_unexpected_state') {
-      return res.status(400).json({
-        success: false,
-        message: 'لا يمكن إلغاء الدفع بعد اكتماله',
-      });
-    }
-
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء إلغاء الدفع',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-    });
-  }
-};
-
-// الحصول على تاريخ الدفعات
-export const getPaymentHistory = async (req: any, res: Response) => {
-  try {
-    const userId = req.user.id;
-    const { page = 1, limit = 10 } = req.query;
-
-    const pageNum = parseInt(page as string) || 1;
-    const limitNum = parseInt(limit as string) || 10;
-    const offset = (pageNum - 1) * limitNum;
-
-    const count = await Booking.countDocuments({
-      userId,
-      paymentStatus: 'paid',
-      status: { $ne: 'cancelled' }
-    });
-    const bookings = await Booking.find({
-      userId,
-      paymentStatus: 'paid',
-      status: { $ne: 'cancelled' }
-    })
-      .populate('place', 'nameAr nameEn featuredImage')
-      .sort({ createdAt: -1 })
-      .skip(offset)
-      .limit(limitNum)
-      .lean();
-
-    // تنسيق البيانات
-    const paymentHistory = (bookings as any[]).map(booking => ({
-      id: booking.id,
-      bookingNumber: booking.bookingNumber,
-      date: booking.confirmedAt || booking.createdAt,
-      amount: booking.totalAmount,
-      currency: booking.currency,
-      status: booking.status,
-      placeName: booking.place?.nameAr,
-      placeImage: booking.place?.featuredImage,
-      serviceType: booking.serviceType,
-      transactionId: booking.transactionId,
-    }));
-
-    res.json({
-      success: true,
-      data: paymentHistory,
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        total: count,
-        totalPages: Math.ceil(count / limitNum),
-      },
-    });
-  } catch (error: any) {
-    console.error('Get payment history error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء جلب سجل الدفعات',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
-    });
-  }
-};
-
-// إنشاء فاتورة
-export const createInvoice = async (req: any, res: Response) => {
-  try {
-    const { bookingId } = req.params;
-    const userId = req.user.id;
-
-    const booking = await Booking.findOne({
-      where: { id: bookingId, userId },
-      include: [
-        { 
-          model: Place, 
-          as: 'place',
-          attributes: ['nameAr', 'nameEn', 'addressAr', 'addressEn', 'contactPhone'] 
-        },
-        { 
-          model: User, 
-          as: 'user',
-          attributes: ['firstName', 'lastName', 'email', 'phone'] 
-        },
-      ],
-    });
-
-    if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'الحجز غير موجود',
-      });
-    }
-
-    const bookingData = booking as any;
-
-    // إنشاء بيانات الفاتورة
-    const invoiceData = {
-      invoiceNumber: `INV-${bookingData.bookingNumber}`,
-      date: new Date().toISOString().split('T')[0],
-      bookingNumber: bookingData.bookingNumber,
-      customer: {
-        name: `${bookingData.user?.firstName || ''} ${bookingData.user?.lastName || ''}`.trim(),
-        email: bookingData.user?.email,
-        phone: bookingData.user?.phone,
-      },
-      place: {
-        name: bookingData.place?.nameAr,
-        address: bookingData.place?.addressAr,
-        phone: bookingData.place?.contactPhone,
-      },
-      items: [
-        {
-          description: `حجز ${bookingData.serviceType}`,
-          quantity: bookingData.numberOfGuests,
-          unitPrice: bookingData.totalAmount / bookingData.numberOfGuests,
-          total: bookingData.totalAmount,
-        },
-      ],
-      subtotal: bookingData.totalAmount,
-      tax: 0, // يمكن إضافة ضريبة إذا لزم
-      total: bookingData.totalAmount,
-      currency: bookingData.currency,
-      paymentStatus: bookingData.paymentStatus,
-      paymentMethod: bookingData.paymentMethod,
-      transactionId: bookingData.transactionId,
-      notes: 'شكراً لاستخدامك دليل دمشق السياحي',
-    };
-
-    res.json({
-      success: true,
-      data: invoiceData,
-      downloadUrl: `/api/payments/invoice/${bookingId}/download`,
-    });
-  } catch (error: any) {
-    console.error('Create invoice error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'حدث خطأ أثناء إنشاء الفاتورة',
+      message: 'حدث خطأ أثناء جلب تفاصيل الدفع',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }

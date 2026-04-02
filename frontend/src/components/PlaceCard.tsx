@@ -4,7 +4,7 @@ import { MapPin, Heart, ArrowLeft, Star } from 'lucide-react';
 
 interface PlaceCardProps {
   place: Place;
-  onFavorite?: (placeId: number) => void;
+  onFavorite?: (placeId: string) => void;
   distanceKm?: number | null;
 }
 
