@@ -90,7 +90,7 @@
 أنشئ ملف `frontend/.env`:
 
 ```env
-VITE_API_URL=http://localhost:5000/api
+VITE_API_URL=http://localhost:5001/api
 VITE_GOOGLE_MAPS_KEY=your_google_maps_key
 ```
 
@@ -99,7 +99,7 @@ VITE_GOOGLE_MAPS_KEY=your_google_maps_key
 أنشئ ملف `backend/.env`:
 
 ```env
-PORT=5000
+PORT=5001
 NODE_ENV=development
 MONGO_URI=mongodb://localhost:27017/damascus_tour_guide
 JWT_SECRET=replace_with_a_strong_secret
@@ -148,7 +148,7 @@ npm run dev
 
 سيعمل على:
 
-`http://localhost:5000`
+`http://localhost:5001`
 
 #### تشغيل الواجهة
 
@@ -206,7 +206,7 @@ npx tsc -p tsconfig.json --noEmit
 
 ### ملاحظات
 
-- الواجهة تعتمد على `VITE_API_URL`، وإذا لم يتم تعريفه فسيتم استخدام `http://localhost:5000/api`.
+- الواجهة تعتمد على `VITE_API_URL`، وإذا لم يتم تعريفه فسيتم استخدام `http://localhost:5001/api`.
 - الدفع يتم عبر Stripe Checkout، لذلك لا يتم تخزين بيانات البطاقة داخل الواجهة.
 - تفعيل البريد والدفع يتطلب إعداد القيم الصحيحة في `.env`.
 - يمكن تشغيل إدخال بيانات تجريبية عبر:
