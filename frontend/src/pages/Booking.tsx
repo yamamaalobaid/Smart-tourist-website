@@ -4,9 +4,10 @@ import Navbar from '../components/Navbar';
 import Loading from '../components/Loading';
 import { placeService, Place } from '../services/places';
 import bookingService from '../services/bookings';
+import paymentService from '../services/payments';
 import { useAuthStore } from '../store/authStore';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Calendar, Users, CreditCard, ShieldCheck, Lock, ChevronRight, AlertCircle, Info, DollarSign } from 'lucide-react';
+import { Calendar, Users, CreditCard, ShieldCheck, Lock, ChevronRight, AlertCircle, DollarSign } from 'lucide-react';
 
 export default function BookingPage() {
   const { placeId } = useParams<{ placeId: string }>();
@@ -23,12 +24,6 @@ export default function BookingPage() {
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-
-  // Payment State
-  const [cardName, setCardName] = useState('');
-  const [cardNumber, setCardNumber] = useState('');
-  const [expiry, setExpiry] = useState('');
-  const [cvc, setCvc] = useState('');
 
   useEffect(() => {
     if (!placeId) return;
@@ -78,17 +73,22 @@ export default function BookingPage() {
     try {
       setSubmitting(true);
       if (!place?._id && !placeId) throw new Error('Missing Place ID');
-      
-      await bookingService.create({
+      const booking = await bookingService.create({
         placeId: (place?._id || placeId) as string,
         startDate: new Date(startDate).toISOString(),
         endDate: new Date(endDate).toISOString(),
         guests,
         notes,
       });
-      setStep(3);
+      const session = await paymentService.createSession(booking.id);
+
+      if (!session.url) {
+        throw new Error('تعذر إنشاء رابط الدفع');
+      }
+
+      window.location.href = session.url;
     } catch (err: any) {
-      setError(err?.response?.data?.message || 'فشل إنشاء الحجز');
+      setError(err?.response?.data?.message || err?.message || 'فشل إنشاء الحجز');
     } finally {
       setSubmitting(false);
     }
@@ -224,70 +224,27 @@ export default function BookingPage() {
                   </div>
 
                   <form onSubmit={handleSubmit} className="space-y-8">
-                    {/* Visual Credit Card */}
-                    <div className="relative w-full h-56 bg-gradient-to-br from-gray-800 to-black rounded-3xl p-8 overflow-hidden shadow-2xl border border-white/10">
+                    <div className="relative w-full bg-gradient-to-br from-gray-800 to-black rounded-3xl p-8 overflow-hidden shadow-2xl border border-white/10">
                        <div className="absolute top-0 right-0 w-64 h-64 bg-accent/5 rounded-full blur-3xl -mr-32 -mt-32"></div>
-                       <div className="flex justify-between items-start mb-12">
+                       <div className="flex justify-between items-start mb-8">
                           <div className="w-12 h-10 bg-gradient-to-r from-yellow-400 to-yellow-600 rounded-lg"></div>
                           <Lock size={24} className="text-gray-600" />
                        </div>
-                       <div className="text-2xl font-bold tracking-[0.2em] mb-8 font-mono">
-                          {cardNumber.padEnd(16, '•').replace(/.{4}/g, '$& ')}
+                       <div className="space-y-4">
+                         <div className="text-sm text-gray-400">
+                           لن نقوم بجمع أو تخزين بيانات البطاقة داخل التطبيق. عند المتابعة سيتم تحويلك إلى بوابة دفع آمنة لإتمام العملية.
+                         </div>
+                         <div className="grid grid-cols-2 gap-4 text-sm">
+                           <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
+                             <div className="text-gray-500 mb-2">المكان</div>
+                             <div className="font-bold">{place?.nameAr}</div>
+                           </div>
+                           <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
+                             <div className="text-gray-500 mb-2">الإجمالي</div>
+                             <div className="font-bold text-accent">{calculateTotal().toLocaleString('ar-SA')} ل.س</div>
+                           </div>
+                         </div>
                        </div>
-                       <div className="flex justify-between items-end">
-                          <div>
-                             <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">اسم صاحب البطاقة</div>
-                             <div className="font-bold uppercase tracking-widest">{cardName || 'YOUR NAME'}</div>
-                          </div>
-                          <div>
-                             <div className="text-[10px] text-gray-500 uppercase font-bold mb-1">تنتهي في</div>
-                             <div className="font-bold tracking-widest">{expiry || 'MM/YY'}</div>
-                          </div>
-                       </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <div className="space-y-2">
-                        <label className="text-xs uppercase tracking-widest text-gray-500 font-bold">الاسم على البطاقة</label>
-                        <input
-                          type="text"
-                          value={cardName}
-                          onChange={(e) => setCardName(e.target.value)}
-                          className="w-full px-4 py-4 bg-white/5 border border-glassBorder rounded-xl focus:border-accent outline-none"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-xs uppercase tracking-widest text-gray-500 font-bold">رقم البطاقة</label>
-                        <input
-                          type="text"
-                          value={cardNumber}
-                          maxLength={16}
-                          onChange={(e) => setCardNumber(e.target.value.replace(/\D/g, ''))}
-                          className="w-full px-4 py-4 bg-white/5 border border-glassBorder rounded-xl focus:border-accent outline-none font-mono"
-                        />
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <label className="text-xs uppercase tracking-widest text-gray-500 font-bold">تاريخ الانتهاء</label>
-                          <input
-                            type="text"
-                            placeholder="MM/YY"
-                            value={expiry}
-                            onChange={(e) => setExpiry(e.target.value)}
-                            className="w-full px-4 py-4 bg-white/5 border border-glassBorder rounded-xl focus:border-accent outline-none"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs uppercase tracking-widest text-gray-500 font-bold">رمز CVC</label>
-                          <input
-                            type="password"
-                            maxLength={3}
-                            value={cvc}
-                            onChange={(e) => setCvc(e.target.value.replace(/\D/g, ''))}
-                            className="w-full px-4 py-4 bg-white/5 border border-glassBorder rounded-xl focus:border-accent outline-none"
-                          />
-                        </div>
-                      </div>
                     </div>
 
                     <div className="flex gap-4">
@@ -308,7 +265,7 @@ export default function BookingPage() {
                         ) : (
                           <>
                             <CreditCard size={20} />
-                            <span>دفع {calculateTotal().toLocaleString('ar-SA')} ل.س الآن</span>
+                            <span>المتابعة إلى بوابة الدفع الآمنة</span>
                           </>
                         )}
                       </button>

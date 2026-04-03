@@ -4,6 +4,7 @@ import { User } from '../models';
 import emailService from '../services/emailService';
 import * as fs from 'fs';
 import * as path from 'path';
+import { getJwtSecret } from '../utils/jwt';
 
 const ERROR_LOG = path.resolve(__dirname, '../../logs/errors.log');
 function logErrorToFile(tag: string, err: any) {
@@ -18,37 +19,20 @@ function logErrorToFile(tag: string, err: any) {
 
 // توليد JWT Token
 const generateToken = (id: number): string => {
-  // In development, allow a default secret for convenience. In production, JWT_SECRET must be set.
-  const env = process.env.NODE_ENV || 'development';
-  let secret = process.env.JWT_SECRET;
-  if (!secret) {
-    if (env === 'development') {
-      secret = 'damascus-dev-secret';
-      console.warn('JWT_SECRET not set — using development fallback secret');
-    } else {
-      throw new Error('JWT_SECRET is not defined in environment variables');
-    }
-  }
-
   const expiresIn = process.env.JWT_EXPIRE || '7d';
   // استخدم as any لتجاوز مشكلة النوع في jwt.sign
-  return jwt.sign({ id }, secret as string, { expiresIn } as any);
+  return jwt.sign({ id }, getJwtSecret(), { expiresIn } as any);
 };
 
 // تسجيل مستخدم جديد
 export const register = async (req: Request, res: Response) => {
   try {
-    // dump request body for debugging
-    try {
-      fs.mkdirSync(path.resolve(__dirname, '../../logs'), { recursive: true });
-      fs.appendFileSync(path.resolve(__dirname, '../../logs/requests.log'), `[${new Date().toISOString()}] register body: ${JSON.stringify(req.body)}\n`);
-    } catch (e) {
-      console.warn('Failed to write requests log', e);
-    }
     const { email, password, firstName, lastName, phone } = req.body;
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : email;
+    const normalizedPhone = typeof phone === 'string' ? phone.trim() : phone;
 
     // التحقق من الحقول المطلوبة
-    if (!email || !password) {
+    if (!normalizedEmail || !password) {
       return res.status(400).json({
         success: false,
         message: 'يرجى إدخال البريد الإلكتروني وكلمة المرور',
@@ -57,7 +41,7 @@ export const register = async (req: Request, res: Response) => {
 
     // التحقق من صحة البريد الإلكتروني
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
+    if (!emailRegex.test(normalizedEmail)) {
       return res.status(400).json({
         success: false,
         message: 'صيغة البريد الإلكتروني غير صحيحة',
@@ -73,17 +57,17 @@ export const register = async (req: Request, res: Response) => {
     }
 
     // التحقق من وجود المستخدم
-    const existingUser = await User.findOne({
-      $or: [
-        { email },
-        { phone: phone || null }
-      ]
-    });
+    const duplicateChecks: any[] = [{ email: normalizedEmail }];
+    if (normalizedPhone) {
+      duplicateChecks.push({ phone: normalizedPhone });
+    }
+
+    const existingUser = await User.findOne({ $or: duplicateChecks });
 
     if (existingUser) {
       return res.status(400).json({
         success: false,
-        message: existingUser.email === email 
+        message: existingUser.email === normalizedEmail 
           ? 'البريد الإلكتروني مسجل مسبقاً'
           : 'رقم الهاتف مسجل مسبقاً',
       });
@@ -98,11 +82,11 @@ export const register = async (req: Request, res: Response) => {
 
     // إنشاء المستخدم مع جميع الحقول المطلوبة
     const user = await User.create({
-      email,
+      email: normalizedEmail,
       password,
       firstName: firstName || null,
       lastName: lastName || null,
-      phone: phone || null,
+      phone: normalizedPhone || null,
       language: 'ar', // القيمة الافتراضية
       isVerified: isVerified, // مفعّل في development
       verificationToken: verificationToken,
@@ -154,38 +138,32 @@ export const register = async (req: Request, res: Response) => {
 // تسجيل الدخول
 export const login = async (req: Request, res: Response) => {
   const { email, password, phone } = req.body || {};
-  console.error(`@@@ [auth] Login attempt start: email="${email}", phone="${phone}", passwordLength=${password ? password.length : 0}`);
+  const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  const normalizedPhone = typeof phone === 'string' ? phone.trim() : '';
   
   try {
-    if ((!email && !phone) || !password) {
-      console.error('@@@ [auth] Error: Missing email/phone or password');
+    if ((!normalizedEmail && !normalizedPhone) || !password) {
       return res.status(400).json({ success: false, message: 'email/phone and password required' });
     }
 
-    const user: any = await (User as any).findOne({ $or: [ { email }, { phone } ] }) as any;
+    const loginConditions: any[] = [];
+    if (normalizedEmail) loginConditions.push({ email: normalizedEmail });
+    if (normalizedPhone) loginConditions.push({ phone: normalizedPhone });
+
+    const user: any = await (User as any).findOne({ $or: loginConditions }) as any;
     if (!user) {
-      console.error(`@@@ [auth] Error: User not found for email="${email}", phone="${phone}"`);
       return res.status(401).json({ success: false, message: 'invalid credentials' });
     }
 
-    console.error(`@@@ [auth] Found user: email="${user.email}", role="${user.role}", storedHash="${user.password}"`);
-    
-    // Manual compare for debugging
-    const manualMatch = await (User.modelName ? (require('bcryptjs') as any).compare(password, user.password) : false);
-    console.error(`@@@ [auth] Manual bcrypt match result: ${manualMatch}`);
-
     const isMatch = await (user as any).comparePassword(password);
-    console.error(`@@@ [auth] model.comparePassword result: ${isMatch}`);
 
     if (!isMatch) {
-      console.error(`@@@ [auth] Error: Password mismatch for user="${user.email}"`);
       return res.status(401).json({ success: false, message: 'invalid credentials' });
     }
 
     user.lastLogin = new Date();
     await user.save();
     const token = generateToken(user.id);
-    console.error(`@@@ [auth] Success: Login successful for "${user.email}"`);
     
     return res.json({ 
       success: true, 
@@ -199,7 +177,7 @@ export const login = async (req: Request, res: Response) => {
       } 
     });
   } catch (error: any) {
-    console.error('@@@ [auth] FATAL ERROR during login:', error && error.message);
+    console.error('Login error:', error);
     return res.status(500).json({ success: false, message: 'login error', error: error && error.message });
   }
 };

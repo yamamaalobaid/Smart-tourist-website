@@ -5,6 +5,8 @@ export interface IBooking extends Document {
   userId: Types.ObjectId;
   placeId: Types.ObjectId;
   serviceType: string;
+  startDate?: Date;
+  endDate?: Date;
   bookingDate: Date;
   numberOfGuests: number;
   totalAmount: number;
@@ -27,6 +29,8 @@ const BookingSchema = new Schema<IBooking>({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   placeId: { type: Schema.Types.ObjectId, ref: 'Place', required: true },
   serviceType: { type: String, required: true, enum: ['tour', 'hotel', 'restaurant', 'activity', 'transport'] },
+  startDate: Date,
+  endDate: Date,
   bookingDate: { type: Date, required: true },
   numberOfGuests: { type: Number, required: true, default: 1 },
   totalAmount: { type: Number, required: true, default: 0 },
@@ -41,7 +45,5 @@ const BookingSchema = new Schema<IBooking>({
   cancelledAt: Date,
   completedAt: Date,
 }, { timestamps: true });
-
-BookingSchema.index({ bookingNumber: 1 });
 
 export default mongoose.model<IBooking>('Booking', BookingSchema);

@@ -2,14 +2,62 @@ import { Request, Response } from 'express';
 import { Booking, Place, User, PlaceImage } from '../models';
 import emailService from '../services/emailService';
 
+const serializeBooking = (booking: any, place?: any) => ({
+  id: booking._id?.toString?.() || booking.id,
+  bookingNumber: booking.bookingNumber,
+  placeId: booking.placeId?.toString?.() || booking.placeId,
+  placeName: place?.nameAr || place?.nameEn || 'مكان سياحي',
+  startDate: booking.startDate || booking.bookingDate,
+  endDate: booking.endDate || booking.startDate || booking.bookingDate,
+  bookingDate: booking.bookingDate,
+  guests: booking.numberOfGuests,
+  numberOfGuests: booking.numberOfGuests,
+  totalPrice: booking.totalAmount,
+  totalAmount: booking.totalAmount,
+  currency: booking.currency,
+  status: booking.status,
+  paymentStatus: booking.paymentStatus,
+  paymentMethod: booking.paymentMethod,
+  transactionId: booking.transactionId,
+  notes: booking.specialRequests || '',
+  specialRequests: booking.specialRequests,
+  createdAt: booking.createdAt,
+  updatedAt: booking.updatedAt,
+  place: place ? {
+    id: place._id,
+    nameAr: place.nameAr,
+    nameEn: place.nameEn,
+    category: place.category,
+    addressAr: place.addressAr,
+    addressEn: place.addressEn,
+    featuredImage: place.featuredImage,
+    mainImage: null,
+  } : undefined,
+});
+
 // إنشاء حجز جديد
 export const createBooking = async (req: any, res: Response) => {
   try {
     const userId = req.user.id;
-    const { placeId, serviceType, bookingDate, numberOfGuests, specialRequests } = req.body;
+    const {
+      placeId,
+      serviceType = 'tour',
+      bookingDate,
+      startDate,
+      endDate,
+      numberOfGuests,
+      guests,
+      specialRequests,
+      notes,
+    } = req.body;
+
+    const normalizedStartDate = startDate || bookingDate;
+    const normalizedEndDate = endDate || normalizedStartDate;
+    const normalizedGuests = Number(numberOfGuests ?? guests ?? 1);
+    const normalizedNotes = specialRequests ?? notes ?? null;
 
     // التحقق من الحقول المطلوبة
-    if (!placeId || !serviceType || !bookingDate) {
+    if (!placeId || !serviceType || !normalizedStartDate) {
       return res.status(400).json({
         success: false,
         message: 'المكان ونوع الخدمة وتاريخ الحجز مطلوبون',
@@ -26,7 +74,22 @@ export const createBooking = async (req: any, res: Response) => {
     }
 
     // التحقق من تاريخ الحجز
-    const bookingDateObj = new Date(bookingDate);
+    const bookingDateObj = new Date(normalizedStartDate);
+    const endDateObj = new Date(normalizedEndDate);
+    if (Number.isNaN(bookingDateObj.getTime()) || Number.isNaN(endDateObj.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'تواريخ الحجز غير صالحة',
+      });
+    }
+
+    if (endDateObj < bookingDateObj) {
+      return res.status(400).json({
+        success: false,
+        message: 'تاريخ النهاية يجب أن يكون بعد تاريخ البداية',
+      });
+    }
+
     if (bookingDateObj < new Date()) {
       return res.status(400).json({
         success: false,
@@ -34,14 +97,23 @@ export const createBooking = async (req: any, res: Response) => {
       });
     }
 
+    if (!Number.isFinite(normalizedGuests) || normalizedGuests < 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'عدد الضيوف يجب أن يكون 1 على الأقل',
+      });
+    }
+
     // إنشاء رقم حجز فريد
     const bookingNumber = `DAM-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
     // حساب السعر
-    let totalAmount = place.entryFee || 0;
-    if (serviceType === 'hotel') {
-      totalAmount = (place.entryFee || 10000) * (numberOfGuests || 1);
-    }
+    const nights = Math.max(
+      1,
+      Math.ceil((endDateObj.getTime() - bookingDateObj.getTime()) / (1000 * 60 * 60 * 24))
+    );
+    const baseAmount = place.entryFee || 0;
+    const totalAmount = baseAmount * normalizedGuests * nights;
 
     // إنشاء الحجز
     const bookingData: any = {
@@ -49,13 +121,15 @@ export const createBooking = async (req: any, res: Response) => {
       userId,
       placeId,
       serviceType,
+      startDate: bookingDateObj,
+      endDate: endDateObj,
       bookingDate: bookingDateObj,
-      numberOfGuests: numberOfGuests || 1,
+      numberOfGuests: normalizedGuests,
       totalAmount,
       currency: 'SYP',
       status: 'pending',
       paymentStatus: 'pending',
-      specialRequests: specialRequests || null,
+      specialRequests: normalizedNotes,
     };
 
     const booking = await Booking.create(bookingData);
@@ -89,7 +163,7 @@ export const createBooking = async (req: any, res: Response) => {
     res.status(201).json({
       success: true,
       message: 'تم إنشاء الحجز بنجاح',
-      data: booking,
+      data: serializeBooking(booking.toObject(), place),
     });
   } catch (error: any) {
     console.error('Create booking error:', error);
@@ -130,29 +204,7 @@ export const getUserBookings = async (req: any, res: Response) => {
     // تنسيق البيانات المرتجعة
     const formattedBookings = bookings.map((booking: any) => {
       const place = placeMap.get(booking.placeId.toString());
-      return {
-        id: booking._id,
-        bookingNumber: booking.bookingNumber,
-        serviceType: booking.serviceType,
-        bookingDate: booking.bookingDate,
-        numberOfGuests: booking.numberOfGuests,
-        totalAmount: booking.totalAmount,
-        currency: booking.currency,
-        status: booking.status,
-        paymentStatus: booking.paymentStatus,
-        specialRequests: booking.specialRequests,
-        createdAt: booking.createdAt,
-        place: {
-          id: place?._id,
-          nameAr: place?.nameAr,
-          nameEn: place?.nameEn,
-          category: place?.category,
-          addressAr: place?.addressAr,
-          addressEn: place?.addressEn,
-          featuredImage: place?.featuredImage,
-          mainImage: null,
-        }
-      };
+      return serializeBooking(booking, place);
     });
 
     res.json({
@@ -194,7 +246,7 @@ export const getBookingById = async (req: any, res: Response) => {
 
     res.json({
       success: true,
-      data: booking,
+      data: serializeBooking(booking),
     });
   } catch (error: any) {
     console.error('Get booking by id error:', error);
@@ -223,7 +275,7 @@ export const updateBooking = async (req: any, res: Response) => {
     }
 
     // التحقق من وقت التعديل (قبل 48 ساعة على الأقل)
-    const bookingDate = new Date(booking.bookingDate);
+    const bookingDate = new Date(booking.startDate || booking.bookingDate);
     const now = new Date();
     const hoursUntilBooking = (bookingDate.getTime() - now.getTime()) / (1000 * 60 * 60);
 
@@ -258,7 +310,7 @@ export const updateBooking = async (req: any, res: Response) => {
     res.json({
       success: true,
       message: 'تم تحديث الحجز بنجاح',
-      data: booking,
+      data: serializeBooking(booking.toObject()),
     });
   } catch (error: any) {
     console.error('Update booking error:', error);
@@ -291,7 +343,7 @@ export const cancelBooking = async (req: any, res: Response) => {
     }
 
     // التحقق من وقت الإلغاء (قبل 24 ساعة على الأقل)
-    const bookingDate = new Date(booking.bookingDate);
+    const bookingDate = new Date(booking.startDate || booking.bookingDate);
     const now = new Date();
     const hoursUntilBooking = (bookingDate.getTime() - now.getTime()) / (1000 * 60 * 60);
 
@@ -328,7 +380,7 @@ export const cancelBooking = async (req: any, res: Response) => {
     res.json({
       success: true,
       message: 'تم إلغاء الحجز بنجاح',
-      data: booking,
+      data: serializeBooking(booking.toObject()),
     });
   } catch (error: any) {
     console.error('Cancel booking error:', error);
@@ -394,7 +446,7 @@ export const confirmBooking = async (req: any, res: Response) => {
     res.json({
       success: true,
       message: 'تم تأكيد الحجز بنجاح',
-      data: booking,
+      data: serializeBooking(booking.toObject()),
     });
   } catch (error: any) {
     console.error('Confirm booking error:', error);
@@ -428,7 +480,7 @@ export const completeBooking = async (req: any, res: Response) => {
     }
 
     // التحقق من أن تاريخ الحجز قد مضى
-    const bookingDate = new Date(booking.bookingDate);
+    const bookingDate = new Date(booking.startDate || booking.bookingDate);
     const now = new Date();
     
     if (bookingDate > now) {
@@ -450,7 +502,7 @@ export const completeBooking = async (req: any, res: Response) => {
     res.json({
       success: true,
       message: 'تم إتمام الحجز بنجاح',
-      data: booking,
+      data: serializeBooking(booking.toObject()),
     });
   } catch (error: any) {
     console.error('Complete booking error:', error);

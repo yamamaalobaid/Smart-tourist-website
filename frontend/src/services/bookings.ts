@@ -1,47 +1,61 @@
 import apiClient from './api';
 
-// Frontend may send a range (startDate/endDate) or a single bookingDate.
 export type BookingCreatePayload = {
   placeId: string;
-  // optional frontend fields
-  startDate?: string; // ISO
-  endDate?: string; // ISO
+  startDate: string;
+  endDate: string;
   guests?: number;
   notes?: string;
-
-  // backend-native fields (optional)
-  bookingDate?: string; // ISO
   serviceType?: string;
-  numberOfGuests?: number;
+};
+
+export type BookingRecord = {
+  id: string;
+  bookingNumber: string;
+  placeId: string;
+  placeName: string;
+  startDate: string;
+  endDate: string;
+  bookingDate: string;
+  guests: number;
+  numberOfGuests: number;
+  totalPrice: number;
+  totalAmount: number;
+  currency: string;
+  status: 'pending' | 'confirmed' | 'cancelled' | 'completed';
+  paymentStatus: string;
+  paymentMethod?: string;
+  transactionId?: string;
+  notes: string;
   specialRequests?: string;
+  createdAt: string;
 };
 
 export const bookingService = {
   create: async (payload: BookingCreatePayload) => {
-    // Normalize to backend expected fields
-    const body: any = {
+    const body = {
       placeId: payload.placeId,
-      // default service type: 'tour'
       serviceType: payload.serviceType || 'tour',
+      startDate: payload.startDate,
+      endDate: payload.endDate,
+      guests: payload.guests ?? 1,
+      notes: payload.notes ?? '',
     };
 
-    if (payload.bookingDate) {
-      body.bookingDate = payload.bookingDate;
-    } else if (payload.startDate) {
-      // backend expects a single bookingDate; use startDate
-      body.bookingDate = payload.startDate;
-    }
-
-    body.numberOfGuests = payload.numberOfGuests ?? payload.guests ?? 1;
-    body.specialRequests = payload.specialRequests ?? payload.notes ?? null;
-
-    const resp = await apiClient.post('/bookings', body);
-    return resp.data;
+    const resp = await apiClient.post<{ data: BookingRecord }>('/bookings', body);
+    return resp.data.data || (resp.data as unknown as BookingRecord);
   },
 
   list: async () => {
-    const resp = await apiClient.get('/bookings');
-    return resp.data;
+    const resp = await apiClient.get<{ data: BookingRecord[] }>('/bookings');
+    return resp.data.data || [];
+  },
+
+  cancel: async (bookingId: string, cancellationReason?: string) => {
+    const resp = await apiClient.put<{ data: BookingRecord }>(`/bookings/${bookingId}/cancel`, {
+      cancellationReason: cancellationReason || null,
+    });
+    return resp.data.data || (resp.data as unknown as BookingRecord);
   },
 };
 

@@ -21,7 +21,7 @@ export const getPlaces = async (req: Request, res: Response) => {
     const limitNum = parseInt(limit as string, 10);
     const skip = (pageNum - 1) * limitNum;
 
-    const filter: any = { isActive: true };
+    const filter: any = { isActive: { $ne: false } };
 
     if (category) {
       const categories = (category as string).split(',').map((x) => x.trim());
@@ -90,6 +90,8 @@ export const getPlaces = async (req: Request, res: Response) => {
       const output: any = {
         ...place,
         image: imageMap[place._id.toString()] || null,
+        featuredImage: place.featuredImage || imageMap[place._id.toString()]?.imageUrl || null,
+        images: imageMap[place._id.toString()] ? [imageMap[place._id.toString()]] : [],
       };
 
       if (latitude && longitude && place.latitude != null && place.longitude != null) {

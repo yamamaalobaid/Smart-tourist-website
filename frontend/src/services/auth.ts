@@ -43,10 +43,11 @@ export const authService = {
 
   // Login with identifier: accepts email or phone
   loginWithIdentifier: async (identifier: string, password: string): Promise<AuthResponse> => {
+    const normalizedIdentifier = identifier.trim();
     const payload: any = { password };
     // naive check: if contains @ treat as email
-    if (identifier.includes('@')) payload.email = identifier;
-    else payload.phone = identifier;
+    if (normalizedIdentifier.includes('@')) payload.email = normalizedIdentifier.toLowerCase();
+    else payload.phone = normalizedIdentifier;
 
     const response = await apiClient.post<AuthResponse>('/auth/login', payload);
     return response.data;

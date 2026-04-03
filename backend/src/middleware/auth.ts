@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { User } from '../models';
+import { getJwtSecret } from '../utils/jwt';
 
 interface AuthRequest extends Request {
   user?: any;
@@ -22,7 +23,7 @@ export const protect = async (req: AuthRequest, res: Response, next: NextFunctio
 
   try {
     // Verify token
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as { id: number };
+    const decoded = jwt.verify(token, getJwtSecret()) as { id: number };
 
     // Get user from database
     const user = await User.findById(decoded.id).select('-password');
