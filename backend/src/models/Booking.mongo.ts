@@ -46,6 +46,4 @@ const BookingSchema = new Schema<IBooking>({
   completedAt: Date,
 }, { timestamps: true });
 
-BookingSchema.index({ bookingNumber: 1 });
-
 export default mongoose.model<IBooking>('Booking', BookingSchema);

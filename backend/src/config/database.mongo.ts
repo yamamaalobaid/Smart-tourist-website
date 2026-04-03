@@ -3,14 +3,14 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/damascus_tour_guide';
+const MONGO_URI =
+  process.env.MONGO_URI ||
+  process.env.DATABASE_URL ||
+  'mongodb://localhost:27017/damascus_tour_guide';
 
 const connectDB = async () => {
   try {
-    await mongoose.connect(MONGO_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    } as any);
+    await mongoose.connect(MONGO_URI);
     console.log('✅ Connected to MongoDB');
   } catch (error) {
     console.error('❌ MongoDB connection error:', error);
