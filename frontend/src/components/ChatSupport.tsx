@@ -99,7 +99,7 @@ export default function ChatSupport() {
         whileHover={{ scale: 1.1 }}
         whileTap={{ scale: 0.95 }}
         onClick={() => setIsOpen(v => !v)}
-        className={`fixed bottom-8 right-8 w-16 h-16 rounded-2xl flex items-center justify-center shadow-2xl z-50 transition-all ${
+        className={`fixed bottom-8 left-8 w-16 h-16 rounded-2xl flex items-center justify-center shadow-2xl z-50 transition-all ${
           isOpen
             ? 'bg-red-500 hover:bg-red-600 shadow-red-500/30'
             : 'bg-gradient-gold text-secondary shadow-[0_0_30px_rgba(212,175,55,0.4)]'
@@ -117,7 +117,7 @@ export default function ChatSupport() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 20, scale: 0.95 }}
             transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-            className="fixed bottom-32 right-8 w-96 glass-panel border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.6)] z-50 overflow-hidden flex flex-col font-cairo"
+            className="fixed bottom-32 left-8 w-96 glass-panel border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.6)] z-50 overflow-hidden flex flex-col font-cairo"
             style={{ maxHeight: 560 }}
           >
             {/* Header */}

@@ -190,13 +190,13 @@ export default function Explore() {
     <div className="min-h-screen bg-background text-gray-100 font-outfit">
       <Navbar />
 
-      <section className="relative pt-32 pb-16 bg-surface border-b border-glassBorder overflow-hidden">
+      <section className="page-header">
         <div className="absolute inset-0 bg-gradient-to-br from-primaryDark/20 to-transparent pointer-events-none" />
-        <div className="max-w-7xl mx-auto px-4 relative z-10 font-cairo">
+        <div className="page-header-inner">
           <motion.h1 
              initial={{ opacity: 0, y: -20 }}
              animate={{ opacity: 1, y: 0 }}
-             className="text-4xl md:text-5xl font-bold mb-6 text-gradient"
+             className="page-header-title mb-6 text-gradient"
           >
              استكشف دمشق 🌍
           </motion.h1>
@@ -273,7 +273,7 @@ export default function Explore() {
         )}
       </AnimatePresence>
 
-      <div className="max-w-7xl mx-auto px-4 py-12">
+      <div className="page-content">
         <div className="grid lg:grid-cols-4 gap-8">
           {/* Sidebar Filters */}
           <div className="lg:col-span-1">

@@ -45,13 +45,13 @@ export default function Places() {
       <Navbar />
 
       {/* Header */}
-      <section className="relative bg-surface border-b border-glassBorder text-white pt-32 pb-16 overflow-hidden">
+      <section className="page-header text-white">
         <div className="absolute inset-0 bg-gradient-to-r from-primaryDark/20 to-transparent pointer-events-none" />
-        <div className="max-w-7xl mx-auto px-4 relative z-10">
+        <div className="page-header-inner">
           <motion.h1 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="text-5xl font-bold mb-4 font-cairo text-gradient"
+            className="page-header-title font-cairo text-gradient"
           >
             استكشف الأماكن
           </motion.h1>
@@ -59,14 +59,14 @@ export default function Places() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
-            className="text-xl text-gray-400 font-light"
+            className="page-header-subtitle"
           >
             اختر من بين مئات الأماكن السياحية المميزة في أقدم عاصمة مأهولة
           </motion.p>
         </div>
       </section>
 
-      <div className="max-w-7xl mx-auto px-4 py-12">
+      <div className="page-content">
         <div className="grid md:grid-cols-4 gap-8">
           {/* Filters Sidebar */}
           <div className="md:col-span-1">

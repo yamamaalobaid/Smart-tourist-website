@@ -54,7 +54,7 @@ export default function AIChatWidget() {
   };
 
   return (
-    <div className="fixed bottom-6 right-6 z-50">
+    <div className="fixed bottom-6 right-8 z-50">
       {/* Chat Widget Button */}
       {!isOpen && (
         <button
@@ -67,7 +67,7 @@ export default function AIChatWidget() {
 
       {/* Chat Window */}
       {isOpen && (
-        <div className="absolute bottom-0 right-0 w-96 h-screen max-h-96 bg-white rounded-lg shadow-2xl flex flex-col overflow-hidden">
+        <div className="absolute bottom-0 right-0 w-96 h-screen max-h-96 bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-slate-200">
           {/* Header */}
           <div className="bg-gradient-damascus text-white p-4 flex justify-between items-center">
             <h3 className="font-bold">مساعد دمشق الذكي 🤖</h3>
@@ -90,7 +90,7 @@ export default function AIChatWidget() {
                   className={`max-w-xs px-3 py-2 rounded-lg ${
                     msg.role === 'user'
                       ? 'bg-primary text-white rounded-bl-none'
-                      : 'bg-gray-200 text-gray-800 rounded-br-none'
+                      : 'bg-gray-100 text-gray-900 rounded-br-none font-medium'
                   }`}
                 >
                   <p className="text-sm">{msg.content}</p>
@@ -99,11 +99,11 @@ export default function AIChatWidget() {
             ))}
             {loading && (
               <div className="flex justify-start">
-                <div className="bg-gray-200 text-gray-800 px-3 py-2 rounded-lg rounded-br-none">
+                <div className="bg-gray-100 text-gray-900 px-3 py-2 rounded-lg rounded-br-none">
                   <div className="flex space-x-2">
-                    <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce"></div>
-                    <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce delay-100"></div>
-                    <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce delay-200"></div>
+                    <div className="w-2 h-2 bg-gray-700 rounded-full animate-bounce"></div>
+                    <div className="w-2 h-2 bg-gray-700 rounded-full animate-bounce delay-100"></div>
+                    <div className="w-2 h-2 bg-gray-700 rounded-full animate-bounce delay-200"></div>
                   </div>
                 </div>
               </div>
@@ -113,14 +113,14 @@ export default function AIChatWidget() {
 
           {/* Suggested Questions */}
           {messages.length === 1 && (
-            <div className="px-4 py-2 space-y-2 border-t border-gray-200">
-              <p className="text-xs text-gray-500 font-semibold">اقتراحات:</p>
+            <div className="px-4 py-3 space-y-3 border-t border-slate-200 bg-slate-50/80">
+              <p className="text-xs text-slate-700 font-bold">اقتراحات سريعة:</p>
               <div className="space-y-2">
                 {suggestedQuestions.slice(0, 3).map((q, idx) => (
                   <button
                     key={idx}
                     onClick={() => handleSendMessage(q)}
-                    className="w-full text-right text-xs bg-gray-50 hover:bg-gray-100 p-2 rounded transition border border-gray-200"
+                    className="w-full text-right text-sm text-slate-800 bg-white hover:bg-amber-50 hover:border-amber-300 p-3 rounded-xl transition-all border border-slate-300 shadow-sm"
                   >
                     {q}
                   </button>
@@ -130,20 +130,20 @@ export default function AIChatWidget() {
           )}
 
           {/* Input */}
-          <div className="border-t border-gray-200 p-3 flex gap-2">
+          <div className="border-t border-gray-200 p-3 flex gap-2 bg-gray-50">
             <input
               type="text"
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
               placeholder="اكتب سؤالك..."
-              className="flex-1 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:border-primary"
+              className="flex-1 border-2 border-gray-300 rounded px-3 py-2 text-sm text-gray-900 placeholder-gray-500 font-medium focus:outline-none focus:border-blue-500 focus:bg-white transition-all duration-200 shadow-sm focus:shadow-md"
               disabled={loading}
             />
             <button
               onClick={() => handleSendMessage()}
               disabled={loading || !inputValue.trim()}
-              className="bg-primary text-white px-3 py-1 rounded text-sm hover:bg-primary/90 disabled:bg-gray-300 transition"
+              className="bg-blue-600 text-white px-4 py-2 rounded text-sm font-semibold hover:bg-blue-700 disabled:bg-gray-300 transition-colors duration-200 shadow-sm"
             >
               إرسال
             </button>
