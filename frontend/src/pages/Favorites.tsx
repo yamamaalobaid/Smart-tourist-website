@@ -71,9 +71,9 @@ export default function Favorites() {
     <div className="min-h-screen bg-background text-gray-100 font-outfit">
       <Navbar />
 
-      <section className="relative pt-32 pb-16 bg-surface border-b border-glassBorder overflow-hidden">
+      <section className="page-header">
         <div className="absolute inset-0 bg-gradient-to-r from-accent/10 to-transparent pointer-events-none" />
-        <div className="max-w-7xl mx-auto px-4 relative z-10 font-cairo">
+        <div className="page-header-inner">
           <motion.div 
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
@@ -82,20 +82,20 @@ export default function Favorites() {
             <div className="p-3 bg-red-500/10 rounded-xl border border-red-500/20">
                <Heart className="w-8 h-8 text-red-500 fill-red-500/20" />
             </div>
-            <h1 className="text-4xl md:text-5xl font-bold text-gradient">قائمة المفضلة</h1>
+            <h1 className="page-header-title text-gradient">قائمة المفضلة</h1>
           </motion.div>
           <motion.p 
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: 0.1 }}
-            className="text-gray-400 text-lg font-light max-w-2xl"
+            className="page-header-subtitle mt-0"
           >
             احتفظ بأماكنك المميزة وعد إليها متى شئت. هذه قائمتك الخاصة لاستكشاف دمشق.
           </motion.p>
         </div>
       </section>
 
-      <div className="max-w-7xl mx-auto px-4 py-16">
+      <div className="page-content md:py-16">
         {error && (
           <motion.div 
             initial={{ opacity: 0, y: -10 }} 

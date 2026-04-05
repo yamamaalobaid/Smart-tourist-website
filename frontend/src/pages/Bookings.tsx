@@ -76,12 +76,15 @@ export default function Bookings() {
     <div className="min-h-screen bg-background font-outfit">
       <Navbar />
 
-      <div className="max-w-6xl mx-auto px-4 py-24 md:py-32 font-cairo">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-28 md:pt-32 pb-12 md:pb-16 font-cairo">
         <div className="flex items-center gap-4 mb-10">
            <div className="p-3 bg-surface border border-glassBorder rounded-xl shadow-[0_0_15px_rgba(212,175,55,0.15)]">
              <Calendar className="w-8 h-8 text-accent" />
            </div>
-           <h1 className="text-4xl md:text-5xl font-bold text-white tracking-wide">حجوزاتي</h1>
+           <div>
+             <h1 className="text-4xl md:text-5xl font-bold text-white tracking-tight">حجوزاتي</h1>
+             <p className="mt-2 text-sm md:text-base font-light text-gray-400">تابع حالة حجوزاتك ونظّم مواعيد زياراتك بسهولة.</p>
+           </div>
         </div>
 
         {error && (

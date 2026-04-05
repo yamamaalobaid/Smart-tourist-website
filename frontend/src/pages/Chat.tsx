@@ -142,15 +142,15 @@ export default function Chat() {
     <div className="min-h-screen flex flex-col bg-background font-outfit h-screen overflow-hidden">
       <Navbar />
 
-      <div className="flex-1 max-w-6xl w-full mx-auto p-4 pt-24 md:pt-32 pb-6 flex flex-col font-cairo">
+      <div className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-28 md:pt-32 pb-8 md:pb-10 flex flex-col font-cairo">
          
-         <div className="flex items-center gap-4 mb-6">
+         <div className="flex items-center gap-4 mb-8">
             <div className="p-3 bg-surface border border-glassBorder rounded-xl shadow-[0_0_15px_rgba(212,175,55,0.15)]">
                <MessageSquare className="w-8 h-8 text-accent" />
             </div>
             <div>
-               <h1 className="text-3xl font-bold text-white tracking-wide">الدعم والدردشة</h1>
-               <p className="text-sm font-light text-gray-400">تواصل مع فريق الدعم لحل مشاكلك</p>
+               <h1 className="text-4xl md:text-5xl font-bold text-white tracking-tight">الدعم والدردشة</h1>
+               <p className="mt-2 text-sm md:text-base font-light text-gray-400">تواصل مع فريق الدعم لحل مشاكلك بسرعة ووضوح.</p>
             </div>
          </div>
 

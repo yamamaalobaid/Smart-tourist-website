@@ -47,18 +47,18 @@ export default function ItineraryPlanner() {
     <div className="min-h-screen bg-background font-cairo text-white">
       <Navbar />
 
-      <div className="max-w-7xl mx-auto px-4 pt-32 pb-20">
+      <div className="page-section pt-28 md:pt-32 pb-14 md:pb-20">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="text-center mb-16"
+          className="text-center mb-12 md:mb-16"
         >
           <div className="inline-flex items-center gap-2 px-4 py-2 bg-accent/10 border border-accent/20 rounded-full text-accent mb-4">
             <Calendar size={18} />
             <span className="text-sm font-bold uppercase tracking-wider">مخطط الرحلات الذكي</span>
           </div>
-          <h1 className="text-4xl md:text-5xl font-bold mb-4 font-cairo">صمم رحلتك المثالية</h1>
-          <p className="text-gray-400 max-w-xl mx-auto">نظم جدولك اليومي، رتب المواقع المفضلة، وشارك خطتك مع رفاق سفرك بكل سهولة.</p>
+          <h1 className="page-header-title mb-4 font-cairo">صمم رحلتك المثالية</h1>
+          <p className="page-header-subtitle mt-0 mx-auto">نظم جدولك اليومي، رتب المواقع المفضلة، وشارك خطتك مع رفاق سفرك بكل سهولة.</p>
         </motion.div>
 
         <div className="grid lg:grid-cols-4 gap-8">
