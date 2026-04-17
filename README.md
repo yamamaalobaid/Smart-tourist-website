@@ -222,9 +222,6 @@ SEED_DATABASE=true
 - `backend/src/seeders/seedDatabaseFixed.ts`
 - `backend/src/scripts/promote-admin.ts`
 
-### الترخيص
-
-هذا المشروع تعليمي/أكاديمي ما لم يذكر صاحب المستودع خلاف ذلك.
 
 ---
 
@@ -445,6 +442,4 @@ Relevant files:
 - `backend/src/seeders/seedDatabaseFixed.ts`
 - `backend/src/scripts/promote-admin.ts`
 
-### License
 
-This project is educational/academic unless the repository owner states otherwise.
